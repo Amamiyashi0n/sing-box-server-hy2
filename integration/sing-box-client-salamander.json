@@ -1,0 +1,39 @@
+{
+  "inbounds": [
+    {
+      "type": "mixed",
+      "listen": "127.0.0.1",
+      "listen_port": 10881
+    },
+    {
+      "type": "direct",
+      "listen": "127.0.0.1",
+      "listen_port": 10882,
+      "network": "udp",
+      "override_address": "127.0.0.1",
+      "override_port": 18081
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "hysteria2",
+      "tag": "rust-hy2-salamander",
+      "server": "127.0.0.1",
+      "server_port": 14444,
+      "up_mbps": 100,
+      "down_mbps": 100,
+      "password": "integration-password",
+      "obfs": {
+        "type": "salamander",
+        "password": "salamander-password"
+      },
+      "tls": {
+        "enabled": true,
+        "insecure": true
+      }
+    }
+  ],
+  "route": {
+    "final": "rust-hy2-salamander"
+  }
+}

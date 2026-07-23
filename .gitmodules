@@ -1,0 +1,3 @@
+[submodule "reference/sing-quic"]
+	path = reference/sing-quic
+	url = https://github.com/SagerNet/sing-quic.git

@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>sing-box-ser-mini Console</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div><strong>sing-box-ser-mini</strong><span>Hysteria 2</span></div>
+      </div>
+      <nav aria-label="配置导航">
+        <a class="active" href="#overview">概览</a>
+        <a href="#network">监听与 TLS</a>
+        <a href="#users">认证用户</a>
+        <a href="#links">客户端链接</a>
+        <a href="#transport">传输策略</a>
+        <a href="#masquerade">Masquerade</a>
+      </nav>
+      <div class="sidebar-foot">
+        <span id="version">v--</span>
+        <button class="link-button" id="change-token" type="button">管理令牌</button>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <h1>配置</h1>
+        <div class="top-actions">
+          <span class="service-state waiting" id="service-state"><i></i><span>连接中</span></span>
+          <button class="button secondary" id="reload" type="button">重新加载</button>
+          <button class="button primary" id="save" type="button">保存并应用</button>
+        </div>
+      </header>
+
+      <section class="overview" id="overview" aria-labelledby="overview-title">
+        <div class="section-heading">
+          <h2 id="overview-title">服务状态</h2>
+          <span id="updated-at">尚未同步</span>
+        </div>
+        <div class="metrics">
+          <article><span>监听地址</span><strong id="metric-listen">--</strong></article>
+          <article><span>认证用户</span><strong id="metric-users">--</strong></article>
+          <article><span>上行 / 下行</span><strong id="metric-bandwidth">--</strong></article>
+          <article><span>运行时长</span><strong id="metric-uptime">--</strong></article>
+        </div>
+        <div class="runtime-flags">
+          <span id="flag-udp">UDP --</span>
+          <span id="flag-obfs">Salamander --</span>
+          <span id="flag-generation">Generation --</span>
+        </div>
+        <div class="error-banner hidden" id="runtime-error"></div>
+      </section>
+
+      <form id="config-form" autocomplete="off">
+        <section class="config-section" id="network" aria-labelledby="network-title">
+          <div class="section-heading"><h2 id="network-title">监听与 TLS</h2></div>
+          <div class="field-grid three">
+            <label class="field wide"><span>监听地址</span><input id="listen" required placeholder="0.0.0.0:443"></label>
+            <label class="field"><span>TLS 证书</span><input id="certificate" required placeholder="/path/fullchain.pem"></label>
+            <label class="field"><span>TLS 私钥</span><input id="private-key" required placeholder="/path/privkey.pem"></label>
+          </div>
+          <div class="field-grid four share-settings">
+            <label class="field"><span>公网服务器</span><input id="share-server" placeholder="hy2.example.com"></label>
+            <label class="field"><span>公网端口</span><input id="share-port" type="number" min="1" max="65535" step="1" placeholder="443"></label>
+            <label class="field"><span>TLS SNI</span><input id="share-sni" placeholder="hy2.example.com"></label>
+            <label class="check share-insecure"><input id="share-insecure" type="checkbox"><span>允许不安全证书</span></label>
+          </div>
+        </section>
+
+        <section class="config-section" id="users" aria-labelledby="users-title">
+          <div class="section-heading">
+            <h2 id="users-title">认证用户</h2>
+            <div class="heading-actions">
+              <label class="check"><input id="show-passwords" type="checkbox"><span>显示密码</span></label>
+              <button class="button secondary compact" id="add-user" type="button">添加用户</button>
+            </div>
+          </div>
+          <div class="user-list" id="user-list"></div>
+        </section>
+
+        <section class="config-section" id="links" aria-labelledby="links-title">
+          <div class="section-heading">
+            <h2 id="links-title">客户端配置链接</h2>
+            <span id="link-count">0 个链接</span>
+          </div>
+          <div class="share-links" id="share-links"></div>
+        </section>
+
+        <section class="config-section" id="transport" aria-labelledby="transport-title">
+          <div class="section-heading"><h2 id="transport-title">传输策略</h2></div>
+          <div class="field-grid four">
+            <label class="field"><span>服务器上行 Mbps</span><input id="up-mbps" type="number" min="0" step="1"></label>
+            <label class="field"><span>服务器下行 Mbps</span><input id="down-mbps" type="number" min="0" step="1"></label>
+            <label class="field"><span>UDP 会话超时 秒</span><input id="udp-timeout" type="number" min="1" step="1"></label>
+            <div class="field toggle-field"><span>UDP 转发</span><label class="switch"><input id="udp-enabled" type="checkbox"><span></span></label></div>
+          </div>
+          <div class="option-row">
+            <label class="check"><input id="ignore-bandwidth" type="checkbox"><span>忽略客户端带宽探测</span></label>
+            <label class="check"><input id="obfs-enabled" type="checkbox"><span>启用 Salamander 混淆</span></label>
+          </div>
+          <div class="field-grid two conditional hidden" id="obfs-fields">
+            <label class="field"><span>Salamander 密码</span><input id="obfs-password" type="password"></label>
+          </div>
+        </section>
+
+        <section class="config-section" id="masquerade" aria-labelledby="masquerade-title">
+          <div class="section-heading"><h2 id="masquerade-title">Masquerade</h2></div>
+          <div class="field-grid three">
+            <label class="field"><span>处理方式</span>
+              <select id="masquerade-type">
+                <option value="none">默认 404</option>
+                <option value="string">固定响应</option>
+                <option value="file">目录服务</option>
+                <option value="proxy">反向代理</option>
+              </select>
+            </label>
+          </div>
+          <div id="masquerade-fields"></div>
+        </section>
+
+        <div class="mobile-save">
+          <button class="button primary" type="submit">保存并应用</button>
+        </div>
+      </form>
+    </main>
+  </div>
+
+  <dialog id="token-dialog">
+    <form method="dialog" id="token-form" class="dialog-body">
+      <h2>管理令牌</h2>
+      <label class="field"><span>Bearer Token</span><input id="admin-token" type="password" autofocus></label>
+      <p class="dialog-error hidden" id="token-error"></p>
+      <div class="dialog-actions">
+        <button class="button secondary" value="cancel" type="button" id="token-cancel">取消</button>
+        <button class="button primary" value="default" type="submit">连接</button>
+      </div>
+    </form>
+  </dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

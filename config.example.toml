@@ -1,0 +1,32 @@
+listen = "[::]:443"
+
+[tls]
+certificate = "/workspace/certs/fullchain.pem"
+private_key = "/workspace/certs/privkey.pem"
+
+[[users]]
+name = "example"
+password = "replace-with-a-long-random-password"
+
+[bandwidth]
+up_mbps = 100
+down_mbps = 100
+ignore_client_bandwidth = false
+
+[udp]
+enabled = true
+timeout_secs = 300
+
+# Optional metadata used to generate client sharing links in the WebUI.
+# [share]
+# server = "hy2.example.com"
+# port = 443
+# sni = "hy2.example.com"
+# insecure = false
+
+# Optional HTTP/3 response for unauthenticated/non-HY2 requests.
+# [masquerade]
+# type = "string"
+# status_code = 200
+# content = "hello"
+# headers = { content-type = ["text/plain; charset=utf-8"] }

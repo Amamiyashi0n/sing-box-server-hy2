@@ -1,0 +1,224 @@
+use std::{collections::HashMap, fs, net::SocketAddr, path::Path};
+
+use anyhow::{Context, Result, ensure};
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Config {
+    pub listen: SocketAddr,
+    pub tls: TlsConfig,
+    pub users: Vec<User>,
+    #[serde(default)]
+    pub bandwidth: Bandwidth,
+    #[serde(default)]
+    pub udp: UdpConfig,
+    pub obfs: Option<ObfsConfig>,
+    pub masquerade: Option<MasqueradeConfig>,
+    pub share: Option<ShareConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TlsConfig {
+    pub certificate: String,
+    pub private_key: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct User {
+    pub name: String,
+    pub password: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Bandwidth {
+    #[serde(default)]
+    pub up_mbps: u64,
+    #[serde(default)]
+    pub down_mbps: u64,
+    #[serde(default)]
+    pub ignore_client_bandwidth: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UdpConfig {
+    #[serde(default = "enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_udp_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObfsConfig {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub password: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShareConfig {
+    pub server: String,
+    pub port: u16,
+    #[serde(default)]
+    pub sni: String,
+    #[serde(default)]
+    pub insecure: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MasqueradeConfig {
+    File {
+        directory: String,
+    },
+    Proxy {
+        url: String,
+        #[serde(default)]
+        rewrite_host: bool,
+    },
+    String {
+        #[serde(default = "default_masquerade_status")]
+        status_code: u16,
+        #[serde(default)]
+        headers: HashMap<String, Vec<String>>,
+        #[serde(default)]
+        content: String,
+    },
+}
+
+const fn enabled() -> bool {
+    true
+}
+
+const fn default_udp_timeout_secs() -> u64 {
+    300
+}
+
+const fn default_masquerade_status() -> u16 {
+    200
+}
+
+impl Default for UdpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            timeout_secs: default_udp_timeout_secs(),
+        }
+    }
+}
+
+impl Config {
+    pub fn load(path: &Path) -> Result<Self> {
+        let contents = fs::read_to_string(path)
+            .with_context(|| format!("read configuration {}", path.display()))?;
+        Self::from_toml(&contents)
+    }
+
+    pub fn from_toml(contents: &str) -> Result<Self> {
+        let config: Self = toml::from_str(contents).context("parse TOML configuration")?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn to_toml(&self) -> Result<String> {
+        self.validate()?;
+        toml::to_string_pretty(self).context("serialize TOML configuration")
+    }
+
+    pub fn save_atomic(&self, path: &Path) -> Result<()> {
+        let contents = self.to_toml()?;
+        let temporary = path.with_extension("toml.tmp");
+        fs::write(&temporary, contents)
+            .with_context(|| format!("write temporary configuration {}", temporary.display()))?;
+        if let Ok(metadata) = fs::metadata(path) {
+            fs::set_permissions(&temporary, metadata.permissions()).with_context(|| {
+                format!("preserve configuration permissions for {}", path.display())
+            })?;
+        }
+        fs::rename(&temporary, path)
+            .with_context(|| format!("replace configuration {}", path.display()))?;
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        ensure!(!self.users.is_empty(), "at least one HY2 user is required");
+        ensure!(
+            self.users.iter().all(|user| !user.password.is_empty()),
+            "HY2 user passwords must not be empty"
+        );
+        ensure!(
+            self.users.iter().all(|user| !user.name.trim().is_empty()),
+            "HY2 user names must not be empty"
+        );
+        ensure!(
+            !self.tls.certificate.trim().is_empty(),
+            "TLS certificate path is required"
+        );
+        ensure!(
+            !self.tls.private_key.trim().is_empty(),
+            "TLS private key path is required"
+        );
+        ensure!(
+            self.udp.timeout_secs > 0,
+            "UDP timeout must be greater than zero"
+        );
+        if let Some(obfs) = &self.obfs {
+            ensure!(obfs.kind == "salamander", "unsupported obfuscation type");
+            ensure!(
+                !obfs.password.is_empty(),
+                "Salamander password must not be empty"
+            );
+        }
+        if let Some(masquerade) = &self.masquerade {
+            match masquerade {
+                MasqueradeConfig::File { directory } => {
+                    ensure!(
+                        !directory.trim().is_empty(),
+                        "masquerade directory is required"
+                    );
+                }
+                MasqueradeConfig::Proxy { url, .. } => {
+                    let url = reqwest::Url::parse(url).context("parse masquerade proxy URL")?;
+                    ensure!(
+                        matches!(url.scheme(), "http" | "https"),
+                        "masquerade proxy URL must use http or https"
+                    );
+                }
+                MasqueradeConfig::String {
+                    status_code,
+                    headers,
+                    ..
+                } => {
+                    http::StatusCode::from_u16(*status_code)
+                        .context("invalid masquerade status code")?;
+                    for (name, values) in headers {
+                        http::HeaderName::from_bytes(name.as_bytes())
+                            .with_context(|| format!("invalid masquerade header name {name}"))?;
+                        for value in values {
+                            http::HeaderValue::from_str(value).with_context(|| {
+                                format!("invalid value for masquerade header {name}")
+                            })?;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(share) = &self.share {
+            ensure!(
+                !share.server.trim().is_empty(),
+                "share server address must not be empty"
+            );
+            ensure!(
+                share.port > 0,
+                "share server port must be greater than zero"
+            );
+        }
+        Ok(())
+    }
+}

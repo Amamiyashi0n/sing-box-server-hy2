@@ -1,0 +1,33 @@
+listen = "127.0.0.1:14443"
+
+[tls]
+certificate = "integration/cert.pem"
+private_key = "integration/key.pem"
+
+[[users]]
+name = "integration"
+password = "integration-password"
+
+[bandwidth]
+up_mbps = 0
+down_mbps = 0
+ignore_client_bandwidth = false
+
+[udp]
+enabled = true
+timeout_secs = 30
+
+[masquerade]
+type = "string"
+status_code = 200
+content = "sing-box-ser-mini"
+
+[masquerade.headers]
+content-type = ["text/plain; charset=utf-8"]
+x-hy2-masquerade = ["active"]
+
+[share]
+server = "127.0.0.1"
+port = 14443
+sni = "localhost"
+insecure = true

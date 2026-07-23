@@ -1,0 +1,28 @@
+listen = "127.0.0.1:14444"
+
+[tls]
+certificate = "integration/cert.pem"
+private_key = "integration/key.pem"
+
+[[users]]
+name = "integration"
+password = "integration-password"
+
+[bandwidth]
+up_mbps = 100
+down_mbps = 100
+ignore_client_bandwidth = false
+
+[udp]
+enabled = true
+timeout_secs = 30
+
+[obfs]
+type = "salamander"
+password = "salamander-password"
+
+[share]
+server = "127.0.0.1"
+port = 14444
+sni = "localhost"
+insecure = true

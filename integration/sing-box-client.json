@@ -1,0 +1,25 @@
+{
+  "inbounds": [
+    {
+      "type": "mixed",
+      "listen": "127.0.0.1",
+      "listen_port": 10880
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "hysteria2",
+      "tag": "rust-hy2",
+      "server": "127.0.0.1",
+      "server_port": 14443,
+      "password": "integration-password",
+      "tls": {
+        "enabled": true,
+        "insecure": true
+      }
+    }
+  ],
+  "route": {
+    "final": "rust-hy2"
+  }
+}
