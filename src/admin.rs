@@ -23,7 +23,7 @@ use tracing::{info, warn};
 
 use crate::{config::Config, server, sublink::SublinkService};
 
-const ADMIN_USERNAME: &str = "admin";
+pub const DEFAULT_ADMIN_USERNAME: &str = "admin";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AdminCredentials {
@@ -496,7 +496,7 @@ fn decode_basic_credentials(authorization: &str) -> Option<(Vec<u8>, Vec<u8>)> {
     ))
 }
 
-pub fn load_or_create_credentials(path: &Path) -> Result<(AdminCredentials, bool)> {
+pub fn load_or_create_credentials(path: &Path, username: &str) -> Result<(AdminCredentials, bool)> {
     match load_credentials(path) {
         Ok(credentials) => Ok((credentials, false)),
         Err(error)
@@ -504,7 +504,7 @@ pub fn load_or_create_credentials(path: &Path) -> Result<(AdminCredentials, bool
                 .downcast_ref::<std::io::Error>()
                 .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
         {
-            let credentials = generated_credentials()?;
+            let credentials = generated_credentials(username)?;
             write_credentials(path, &credentials)?;
             Ok((credentials, true))
         }
@@ -512,8 +512,8 @@ pub fn load_or_create_credentials(path: &Path) -> Result<(AdminCredentials, bool
     }
 }
 
-pub fn reset_credentials(path: &Path) -> Result<AdminCredentials> {
-    let credentials = generated_credentials()?;
+pub fn reset_credentials(path: &Path, username: &str) -> Result<AdminCredentials> {
+    let credentials = generated_credentials(username)?;
     write_credentials(path, &credentials)?;
     Ok(credentials)
 }
@@ -523,13 +523,15 @@ fn load_credentials(path: &Path) -> Result<AdminCredentials> {
         .with_context(|| format!("read admin credentials {}", path.display()))?;
     let credentials: AdminCredentials = toml::from_str(&contents)
         .with_context(|| format!("parse admin credentials {}", path.display()))?;
-    if credentials.username != ADMIN_USERNAME || credentials.password.is_empty() {
-        bail!("admin credentials must use username {ADMIN_USERNAME} and a non-empty password");
-    }
+    ensure_credentials(&credentials)?;
     Ok(credentials)
 }
 
-fn generated_credentials() -> Result<AdminCredentials> {
+fn generated_credentials(username: &str) -> Result<AdminCredentials> {
+    let username = username.trim();
+    if username.is_empty() {
+        bail!("admin username must not be empty");
+    }
     let mut random = [0_u8; 24];
     getrandom::fill(&mut random).context("generate admin password")?;
     let password = random
@@ -540,9 +542,16 @@ fn generated_credentials() -> Result<AdminCredentials> {
             output
         });
     Ok(AdminCredentials {
-        username: ADMIN_USERNAME.to_owned(),
+        username: username.to_owned(),
         password,
     })
+}
+
+fn ensure_credentials(credentials: &AdminCredentials) -> Result<()> {
+    if credentials.username.trim().is_empty() || credentials.password.is_empty() {
+        bail!("admin credentials require a non-empty username and password");
+    }
+    Ok(())
 }
 
 fn write_credentials(path: &Path, credentials: &AdminCredentials) -> Result<()> {
@@ -615,16 +624,17 @@ mod tests {
     fn creates_and_resets_admin_credentials() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("admin.toml");
-        let (initial, created) = load_or_create_credentials(&path).unwrap();
+        let (initial, created) = load_or_create_credentials(&path, DEFAULT_ADMIN_USERNAME).unwrap();
         assert!(created);
-        assert_eq!(initial.username, ADMIN_USERNAME);
+        assert_eq!(initial.username, DEFAULT_ADMIN_USERNAME);
         assert_eq!(initial.password.len(), 48);
 
-        let (loaded, created) = load_or_create_credentials(&path).unwrap();
+        let (loaded, created) = load_or_create_credentials(&path, DEFAULT_ADMIN_USERNAME).unwrap();
         assert!(!created);
         assert_eq!(loaded.password, initial.password);
 
-        let reset = reset_credentials(&path).unwrap();
+        let reset = reset_credentials(&path, "operator").unwrap();
+        assert_eq!(reset.username, "operator");
         assert_ne!(reset.password, initial.password);
         assert_eq!(load_credentials(&path).unwrap().password, reset.password);
 

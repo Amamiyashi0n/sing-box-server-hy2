@@ -41,6 +41,7 @@ Reset the WebUI password without starting the server:
 ```sh
 target/release/sing-box-ser-mini \
   --admin-credentials-file .admin-credentials.toml \
+  --admin-username admin \
   --reset-admin-password
 ```
 

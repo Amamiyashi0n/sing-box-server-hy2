@@ -17,6 +17,8 @@ struct Args {
     admin_token_file: Option<PathBuf>,
     #[arg(long, default_value = ".admin-credentials.toml")]
     admin_credentials_file: PathBuf,
+    #[arg(long, default_value = "admin")]
+    admin_username: String,
     #[arg(long, help = "Generate a new password for the admin WebUI and exit")]
     reset_admin_password: bool,
     #[arg(long)]
@@ -51,8 +53,10 @@ fn main() -> Result<()> {
 
 async fn run(args: Args) -> Result<()> {
     if args.reset_admin_password {
-        let credentials =
-            sing_box_ser_mini::admin::reset_credentials(&args.admin_credentials_file)?;
+        let credentials = sing_box_ser_mini::admin::reset_credentials(
+            &args.admin_credentials_file,
+            &args.admin_username,
+        )?;
         println!("Admin username: {}", credentials.username);
         println!("Admin password: {}", credentials.password);
         println!(
@@ -78,8 +82,10 @@ async fn run(args: Args) -> Result<()> {
     } else {
         std::env::var("SING_BOX_SER_MINI_ADMIN_TOKEN").ok()
     };
-    let (credentials, created) =
-        sing_box_ser_mini::admin::load_or_create_credentials(&args.admin_credentials_file)?;
+    let (credentials, created) = sing_box_ser_mini::admin::load_or_create_credentials(
+        &args.admin_credentials_file,
+        &args.admin_username,
+    )?;
     if created {
         println!("Generated WebUI credentials");
         println!("Admin username: {}", credentials.username);
