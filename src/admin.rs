@@ -10,7 +10,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{OriginalUri, Path as AxumPath, State},
     http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
@@ -21,7 +21,7 @@ use subtle::ConstantTimeEq;
 use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tracing::{info, warn};
 
-use crate::{config::Config, server};
+use crate::{config::Config, server, sublink::SublinkService};
 
 const ADMIN_USERNAME: &str = "admin";
 
@@ -39,6 +39,7 @@ struct AdminState {
     runtime: Arc<RwLock<RuntimeState>>,
     write_lock: Arc<Mutex<()>>,
     commands: mpsc::Sender<Command>,
+    sublink: Arc<SublinkService>,
 }
 
 #[derive(Default)]
@@ -101,6 +102,7 @@ pub async fn run(
         runtime: Arc::new(RwLock::new(RuntimeState::default())),
         write_lock: Arc::new(Mutex::new(())),
         commands,
+        sublink: Arc::new(SublinkService::default()),
     };
     let listener = tokio::net::TcpListener::bind(listen)
         .await
@@ -210,6 +212,14 @@ fn router(state: AdminState) -> Router {
         .route("/api/v1/status", get(status))
         .route("/api/v1/config", get(get_config).put(put_config))
         .route("/api/v1/reload", post(reload))
+        .route("/singbox", get(sublink_singbox))
+        .route("/clash", get(sublink_clash))
+        .route("/surge", get(sublink_surge))
+        .route("/xray", get(sublink_xray))
+        .route("/shorten-v2", get(sublink_shorten))
+        .route("/resolve", get(sublink_resolve))
+        .route("/subconverter", get(sublink_subconverter))
+        .route("/{prefix}/{code}", get(sublink_redirect))
         .with_state(state)
 }
 
@@ -332,6 +342,118 @@ async fn reload(
         accepted: true,
         message: "HY2 service is reloading",
     }))
+}
+
+async fn sublink_singbox(state: State<AdminState>, uri: OriginalUri) -> Response {
+    sublink_convert("singbox", state, uri)
+}
+
+async fn sublink_clash(state: State<AdminState>, uri: OriginalUri) -> Response {
+    sublink_convert("clash", state, uri)
+}
+
+async fn sublink_surge(state: State<AdminState>, uri: OriginalUri) -> Response {
+    sublink_convert("surge", state, uri)
+}
+
+async fn sublink_xray(state: State<AdminState>, uri: OriginalUri) -> Response {
+    sublink_convert("xray", state, uri)
+}
+
+fn sublink_convert(
+    format: &str,
+    State(state): State<AdminState>,
+    OriginalUri(uri): OriginalUri,
+) -> Response {
+    let Some(input) = uri_parameter(&uri, "config") else {
+        return sublink_error(StatusCode::BAD_REQUEST, "missing config parameter");
+    };
+    match state.sublink.convert(format, &input) {
+        Ok(output) => (
+            [
+                (header::CONTENT_TYPE, output.content_type),
+                (header::CACHE_CONTROL, "no-store"),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            ],
+            output.body,
+        )
+            .into_response(),
+        Err(error) => sublink_error(StatusCode::BAD_REQUEST, error),
+    }
+}
+
+async fn sublink_shorten(
+    State(state): State<AdminState>,
+    OriginalUri(uri): OriginalUri,
+) -> Response {
+    let Some(url) = uri_parameter(&uri, "url") else {
+        return sublink_error(StatusCode::BAD_REQUEST, "missing URL parameter");
+    };
+    let requested = uri_parameter(&uri, "shortCode");
+    match state.sublink.shorten(&url, requested.as_deref()).await {
+        Ok(code) => ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], code).into_response(),
+        Err(error) => sublink_error(sublink_status(&error), error),
+    }
+}
+
+async fn sublink_redirect(
+    State(state): State<AdminState>,
+    AxumPath((prefix, code)): AxumPath<(String, String)>,
+) -> Response {
+    match state.sublink.redirect(&prefix, &code).await {
+        Ok(location) => (StatusCode::FOUND, [(header::LOCATION, location)], "").into_response(),
+        Err(error) => sublink_error(sublink_status(&error), error),
+    }
+}
+
+async fn sublink_resolve(
+    State(state): State<AdminState>,
+    OriginalUri(uri): OriginalUri,
+) -> Response {
+    let Some(url) = uri_parameter(&uri, "url") else {
+        return sublink_error(StatusCode::BAD_REQUEST, "missing URL parameter");
+    };
+    match state.sublink.resolve(&url).await {
+        Ok(body) => (
+            [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+            body,
+        )
+            .into_response(),
+        Err(error) => sublink_error(sublink_status(&error), error),
+    }
+}
+
+async fn sublink_subconverter() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        "[common]\n; Rust core keeps this endpoint local and dependency-free.\n",
+    )
+}
+
+fn uri_parameter(uri: &http::Uri, name: &str) -> Option<String> {
+    url::form_urlencoded::parse(uri.query()?.as_bytes())
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.into_owned())
+}
+
+fn sublink_status(error: &anyhow::Error) -> StatusCode {
+    let message = error.to_string();
+    if message.contains("not found") {
+        StatusCode::NOT_FOUND
+    } else if message.contains("disabled") {
+        StatusCode::NOT_IMPLEMENTED
+    } else {
+        StatusCode::BAD_REQUEST
+    }
+}
+
+fn sublink_error(status: StatusCode, error: impl std::fmt::Display) -> Response {
+    (
+        status,
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        error.to_string(),
+    )
+        .into_response()
 }
 
 async fn authorize(state: &AdminState, headers: &HeaderMap) -> ApiResult<()> {

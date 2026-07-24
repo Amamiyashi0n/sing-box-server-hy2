@@ -62,6 +62,22 @@ password.
 The UI provides runtime status, typed configuration editing, atomic saves, and
 HY2 service reloads without restarting the management process.
 
+## Subscription converter
+
+The WebUI includes a Rust-native subscription converter on the same management
+port. It accepts SS, VMess, VLESS, Trojan, Hysteria2, TUIC, AnyTLS, and Base64
+subscriptions, and emits Sing-Box, Clash, Surge, or Xray output. Generated
+short links use a bounded in-memory store with a default capacity of 512 and a
+24-hour TTL.
+
+The public client routes are `/singbox`, `/clash`, `/surge`, `/xray`,
+`/shorten-v2`, `/resolve`, and `/{b,c,s,x}/<code>`. Remote HTTP(S)
+subscription fetching is intentionally disabled.
+
+The conversion behavior was rewritten in Rust from the MIT-licensed
+`Amamiyashi0n/sublink-worker-c` implementation; no C code, darkhttpd process,
+or secondary HTTP port is included.
+
 Add optional sharing metadata to generate one standards-compliant Hysteria 2
 URI per configured user:
 

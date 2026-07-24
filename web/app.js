@@ -1,5 +1,20 @@
 const $ = (selector, root = document) => root.querySelector(selector);
-const state = { config: null, username: sessionStorage.getItem("admin-username") || "admin", password: "", timer: null };
+const state = {
+  config: null,
+  username: sessionStorage.getItem("admin-username") || "admin",
+  password: "",
+  timer: null,
+  converter: {
+    source: localStorage.getItem("sublink-source") || "",
+    format: localStorage.getItem("sublink-format") || "singbox",
+    links: null,
+    busy: false
+  }
+};
+
+const CONVERTER_FORMATS = ["singbox", "clash", "surge", "xray"];
+const CONVERTER_LABELS = { singbox: "Sing-Box", clash: "Clash", surge: "Surge", xray: "Xray" };
+const CONVERTER_PREFIXES = { singbox: "b", clash: "c", surge: "s", xray: "x" };
 
 function basicAuthorization(username, password) {
   const bytes = new TextEncoder().encode(`${username}:${password}`);
@@ -224,6 +239,92 @@ function applyPasswordVisibility() {
   document.querySelectorAll("[data-user-password], #obfs-password").forEach(input => { input.type = type; });
 }
 
+function renderConverter() {
+  const source = state.converter.source;
+  const lines = source.split(/\r?\n/).filter(line => line.trim()).length;
+  const bytes = new TextEncoder().encode(source).length;
+  $("#converter-stats").textContent = `${lines} 行 / ${bytes} B`;
+  $("#converter-source").value = source;
+  document.querySelectorAll("[data-converter-format]").forEach(button => {
+    const active = button.dataset.converterFormat === state.converter.format;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  $("#converter-generate").disabled = state.converter.busy;
+  $("#converter-generate").textContent = state.converter.busy ? "生成中" : "生成订阅";
+  renderConverterResults();
+}
+
+function setConverterStatus(message = "", error = false) {
+  const target = $("#converter-status");
+  target.textContent = message;
+  target.classList.toggle("error", error);
+}
+
+function orderedConverterFormats() {
+  return [state.converter.format, ...CONVERTER_FORMATS.filter(format => format !== state.converter.format)];
+}
+
+function renderConverterResults() {
+  const target = $("#converter-results");
+  const links = state.converter.links;
+  target.classList.toggle("hidden", !links);
+  if (!links) {
+    target.replaceChildren();
+    return;
+  }
+  target.innerHTML = orderedConverterFormats().map(format => `
+    <div class="converter-result ${format === state.converter.format ? "preferred" : ""}">
+      <strong>${CONVERTER_LABELS[format]}</strong>
+      <input aria-label="${CONVERTER_LABELS[format]} 订阅地址" readonly value="${escapeHtml(links[format])}">
+      <button class="button secondary compact" data-converter-copy="${format}" type="button">复制</button>
+      <a class="button secondary compact converter-open" href="${escapeHtml(links[format])}" target="_blank" rel="noreferrer">打开</a>
+    </div>`).join("");
+  target.querySelectorAll("[data-converter-copy]").forEach(button => button.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(links[button.dataset.converterCopy]);
+      setConverterStatus("订阅地址已复制");
+    } catch {
+      setConverterStatus("无法写入剪贴板", true);
+    }
+  }));
+}
+
+async function generateConverterLinks() {
+  const source = state.converter.source.replace(/\r\n?/g, "\n").trim();
+  if (!source) {
+    setConverterStatus("请先输入节点或 Base64 订阅", true);
+    return;
+  }
+  if (source.split(/\r?\n/).some(line => /^https?:\/\//i.test(line.trim()))) {
+    setConverterStatus("不支持远程 HTTP(S) 订阅地址", true);
+    return;
+  }
+  state.converter.busy = true;
+  renderConverter();
+  setConverterStatus();
+  try {
+    const pairs = await Promise.all(CONVERTER_FORMATS.map(async format => {
+      const longUrl = new URL(`/${format}`, window.location.origin);
+      longUrl.searchParams.set("config", source);
+      const shorten = new URL("/shorten-v2", window.location.origin);
+      shorten.searchParams.set("url", longUrl.toString());
+      const response = await fetch(shorten);
+      if (!response.ok) throw new Error(await response.text() || "短链接生成失败");
+      const code = (await response.text()).trim();
+      return [format, `${window.location.origin}/${CONVERTER_PREFIXES[format]}/${encodeURIComponent(code)}`];
+    }));
+    state.converter.links = Object.fromEntries(pairs);
+    setConverterStatus("已生成 4 个客户端订阅地址");
+  } catch (error) {
+    state.converter.links = null;
+    setConverterStatus(error.message || "订阅生成失败", true);
+  } finally {
+    state.converter.busy = false;
+    renderConverter();
+  }
+}
+
 function renderMasquerade(type, value = {}) {
   const target = $("#masquerade-fields");
   if (type === "none") { target.innerHTML = ""; return; }
@@ -313,6 +414,37 @@ function bindEvents() {
   $("#show-passwords").addEventListener("change", applyPasswordVisibility);
   $("#config-form").addEventListener("input", renderShareLinks);
   $("#masquerade-type").addEventListener("change", event => renderMasquerade(event.target.value));
+  $("#converter-source").addEventListener("input", event => {
+    state.converter.source = event.target.value;
+    state.converter.links = null;
+    localStorage.setItem("sublink-source", state.converter.source);
+    renderConverter();
+    setConverterStatus();
+  });
+  document.querySelectorAll("[data-converter-format]").forEach(button => button.addEventListener("click", () => {
+    state.converter.format = button.dataset.converterFormat;
+    localStorage.setItem("sublink-format", state.converter.format);
+    renderConverter();
+  }));
+  $("#converter-generate").addEventListener("click", generateConverterLinks);
+  $("#converter-clear").addEventListener("click", () => {
+    state.converter.source = "";
+    state.converter.links = null;
+    localStorage.removeItem("sublink-source");
+    renderConverter();
+    setConverterStatus();
+  });
+  $("#converter-paste").addEventListener("click", async () => {
+    try {
+      state.converter.source = await navigator.clipboard.readText();
+      state.converter.links = null;
+      localStorage.setItem("sublink-source", state.converter.source);
+      renderConverter();
+      setConverterStatus();
+    } catch {
+      setConverterStatus("无法读取剪贴板", true);
+    }
+  });
   $("#change-user").addEventListener("click", () => {
     state.password = "";
     openLoginDialog();
@@ -340,6 +472,7 @@ function bindEvents() {
 
 async function initialize() {
   bindEvents();
+  renderConverter();
   try {
     await Promise.all([loadConfig(), loadStatus()]);
   } catch (error) {

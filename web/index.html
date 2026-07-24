@@ -18,6 +18,7 @@
         <a href="#network">监听与 TLS</a>
         <a href="#users">认证用户</a>
         <a href="#links">客户端链接</a>
+        <a href="#converter">订阅转换</a>
         <a href="#transport">传输策略</a>
         <a href="#masquerade">Masquerade</a>
       </nav>
@@ -127,6 +128,32 @@
           <button class="button primary" type="submit">保存并应用</button>
         </div>
       </form>
+
+      <section class="config-section converter-section" id="converter" aria-labelledby="converter-title">
+        <div class="section-heading">
+          <h2 id="converter-title">订阅转换</h2>
+          <span id="converter-stats">0 行 / 0 B</span>
+        </div>
+        <label class="field">
+          <span>节点或 Base64 订阅</span>
+          <textarea class="converter-source" id="converter-source" spellcheck="false" placeholder="粘贴 SS、VMess、VLESS、Trojan、Hysteria2、TUIC 或 AnyTLS 链接"></textarea>
+        </label>
+        <div class="converter-tools">
+          <div class="converter-formats" role="tablist" aria-label="输出格式">
+            <button class="converter-format active" type="button" role="tab" aria-selected="true" data-converter-format="singbox">Sing-Box</button>
+            <button class="converter-format" type="button" role="tab" aria-selected="false" data-converter-format="clash">Clash</button>
+            <button class="converter-format" type="button" role="tab" aria-selected="false" data-converter-format="surge">Surge</button>
+            <button class="converter-format" type="button" role="tab" aria-selected="false" data-converter-format="xray">Xray</button>
+          </div>
+          <div class="converter-actions">
+            <button class="button secondary compact" id="converter-paste" type="button">粘贴</button>
+            <button class="button secondary compact" id="converter-clear" type="button">清空</button>
+            <button class="button primary" id="converter-generate" type="button">生成订阅</button>
+          </div>
+        </div>
+        <p class="converter-status" id="converter-status" role="status" aria-live="polite"></p>
+        <div class="converter-results hidden" id="converter-results"></div>
+      </section>
     </main>
   </div>
 
