@@ -15,6 +15,10 @@ struct Args {
     admin_listen: SocketAddr,
     #[arg(long)]
     admin_token_file: Option<PathBuf>,
+    #[arg(long, default_value = ".admin-credentials.toml")]
+    admin_credentials_file: PathBuf,
+    #[arg(long, help = "Generate a new password for the admin WebUI and exit")]
+    reset_admin_password: bool,
     #[arg(long)]
     no_admin: bool,
     #[arg(long, help = "Tokio runtime worker threads (default: up to 4)")]
@@ -46,6 +50,17 @@ fn main() -> Result<()> {
 }
 
 async fn run(args: Args) -> Result<()> {
+    if args.reset_admin_password {
+        let credentials =
+            sing_box_ser_mini::admin::reset_credentials(&args.admin_credentials_file)?;
+        println!("Admin username: {}", credentials.username);
+        println!("Admin password: {}", credentials.password);
+        println!(
+            "Credentials written to {}",
+            args.admin_credentials_file.display()
+        );
+        return Ok(());
+    }
     let config = Config::load(&args.config)?;
     if args.check {
         println!(
@@ -63,5 +78,22 @@ async fn run(args: Args) -> Result<()> {
     } else {
         std::env::var("SING_BOX_SER_MINI_ADMIN_TOKEN").ok()
     };
-    sing_box_ser_mini::admin::run(args.config, args.admin_listen, token).await
+    let (credentials, created) =
+        sing_box_ser_mini::admin::load_or_create_credentials(&args.admin_credentials_file)?;
+    if created {
+        println!("Generated WebUI credentials");
+        println!("Admin username: {}", credentials.username);
+        println!("Admin password: {}", credentials.password);
+        println!(
+            "Credentials written to {}",
+            args.admin_credentials_file.display()
+        );
+    }
+    sing_box_ser_mini::admin::run(
+        args.config,
+        args.admin_listen,
+        token,
+        args.admin_credentials_file,
+    )
+    .await
 }

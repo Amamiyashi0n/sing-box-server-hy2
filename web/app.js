@@ -1,9 +1,16 @@
 const $ = (selector, root = document) => root.querySelector(selector);
-const state = { config: null, token: sessionStorage.getItem("admin-token") || "", timer: null };
+const state = { config: null, username: sessionStorage.getItem("admin-username") || "admin", password: "", timer: null };
+
+function basicAuthorization(username, password) {
+  const bytes = new TextEncoder().encode(`${username}:${password}`);
+  let binary = "";
+  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+  return `Basic ${btoa(binary)}`;
+}
 
 function authHeaders(json = false) {
   const headers = {};
-  if (state.token) headers.Authorization = `Bearer ${state.token}`;
+  if (state.username && state.password) headers.Authorization = basicAuthorization(state.username, state.password);
   if (json) headers["Content-Type"] = "application/json";
   return headers;
 }
@@ -12,18 +19,21 @@ async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { ...authHeaders(Boolean(options.body)), ...(options.headers || {}) } });
   const payload = await response.json().catch(() => ({}));
   if (response.status === 401) {
-    openTokenDialog();
-    throw new Error("需要有效的管理令牌");
+    const message = state.password ? "用户名或密码错误" : "请使用管理账户登录";
+    state.password = "";
+    openLoginDialog(message);
+    throw new Error("需要登录");
   }
   if (!response.ok) throw new Error(payload.error || `请求失败 (${response.status})`);
   return payload;
 }
 
-function openTokenDialog(message = "") {
-  const dialog = $("#token-dialog");
-  $("#token-error").textContent = message;
-  $("#token-error").classList.toggle("hidden", !message);
-  $("#admin-token").value = state.token;
+function openLoginDialog(message = "") {
+  const dialog = $("#login-dialog");
+  $("#login-error").textContent = message;
+  $("#login-error").classList.toggle("hidden", !message);
+  $("#login-username").value = state.username;
+  $("#login-password").value = "";
   if (!dialog.open) dialog.showModal();
 }
 
@@ -64,7 +74,7 @@ async function loadStatus() {
     $("#runtime-error").textContent = status.last_error || "";
     $("#runtime-error").classList.toggle("hidden", !status.last_error);
   } catch (error) {
-    if (!$("#token-dialog").open) toast(error.message, true);
+    if (!$("#login-dialog").open) toast(error.message, true);
   }
 }
 
@@ -303,19 +313,23 @@ function bindEvents() {
   $("#show-passwords").addEventListener("change", applyPasswordVisibility);
   $("#config-form").addEventListener("input", renderShareLinks);
   $("#masquerade-type").addEventListener("change", event => renderMasquerade(event.target.value));
-  $("#change-token").addEventListener("click", () => openTokenDialog());
-  $("#token-cancel").addEventListener("click", () => $("#token-dialog").close());
-  $("#token-form").addEventListener("submit", async event => {
+  $("#change-user").addEventListener("click", () => {
+    state.password = "";
+    openLoginDialog();
+  });
+  $("#login-cancel").addEventListener("click", () => $("#login-dialog").close());
+  $("#login-form").addEventListener("submit", async event => {
     event.preventDefault();
-    state.token = $("#admin-token").value.trim();
-    sessionStorage.setItem("admin-token", state.token);
+    state.username = $("#login-username").value.trim();
+    state.password = $("#login-password").value;
+    sessionStorage.setItem("admin-username", state.username);
     try {
       await loadConfig();
-      $("#token-dialog").close();
+      $("#login-dialog").close();
       await loadStatus();
     } catch (error) {
-      $("#token-error").textContent = error.message;
-      $("#token-error").classList.remove("hidden");
+      $("#login-error").textContent = error.message;
+      $("#login-error").classList.remove("hidden");
     }
   });
   document.querySelectorAll("nav a").forEach(link => link.addEventListener("click", () => {
@@ -329,7 +343,7 @@ async function initialize() {
   try {
     await Promise.all([loadConfig(), loadStatus()]);
   } catch (error) {
-    if (!$("#token-dialog").open) toast(error.message, true);
+    if (!$("#login-dialog").open) toast(error.message, true);
   }
   state.timer = setInterval(loadStatus, 5000);
 }

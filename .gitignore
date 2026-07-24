@@ -1,7 +1,7 @@
 /target/
 /config.toml
 /.admin-token
+/.admin-credentials.toml
 /integration/cert.pem
 /integration/key.pem
 *.log
-

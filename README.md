@@ -27,7 +27,8 @@ cargo run --release -- --config config.example.toml
 ## WebUI
 
 The Rust process serves the management UI and API directly; no separate HTTP
-server is required. Loopback access does not require a token:
+server is required. On first start it creates `.admin-credentials.toml` with
+mode `0600`, username `admin`, and a random password printed once to stdout:
 
 ```sh
 target/release/sing-box-ser-mini \
@@ -35,18 +36,29 @@ target/release/sing-box-ser-mini \
   --admin-listen 127.0.0.1:9080
 ```
 
+Reset the WebUI password without starting the server:
+
+```sh
+target/release/sing-box-ser-mini \
+  --admin-credentials-file .admin-credentials.toml \
+  --reset-admin-password
+```
+
+The new password takes effect immediately because API authentication reads the
+credential file on each request.
+
 The runtime uses up to four Tokio worker threads by default. Override this for
 larger hosts with `--worker-threads N` after measuring the actual workload.
 
-For external access, use the managed launcher. It creates `.admin-token` with
-mode `0600` and refuses public management access without a token:
+For external access, use the managed launcher:
 
 ```sh
 CONFIG_PATH=/workspace/sing-box-ser-mini/config.toml \
   scripts/start-managed.sh
 ```
 
-Open `http://server-address:9080` and enter the value from `.admin-token`.
+Open `http://server-address:9080` and sign in as `admin` with the generated
+password.
 The UI provides runtime status, typed configuration editing, atomic saves, and
 HY2 service reloads without restarting the management process.
 

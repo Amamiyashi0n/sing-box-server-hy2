@@ -23,7 +23,7 @@
       </nav>
       <div class="sidebar-foot">
         <span id="version">v--</span>
-        <button class="link-button" id="change-token" type="button">管理令牌</button>
+        <button class="link-button" id="change-user" type="button">切换用户</button>
       </div>
     </aside>
 
@@ -130,14 +130,15 @@
     </main>
   </div>
 
-  <dialog id="token-dialog">
-    <form method="dialog" id="token-form" class="dialog-body">
-      <h2>管理令牌</h2>
-      <label class="field"><span>Bearer Token</span><input id="admin-token" type="password" autofocus></label>
-      <p class="dialog-error hidden" id="token-error"></p>
+  <dialog id="login-dialog">
+    <form method="dialog" id="login-form" class="dialog-body">
+      <h2>登录</h2>
+      <label class="field"><span>用户名</span><input id="login-username" autocomplete="username" required autofocus></label>
+      <label class="field"><span>密码</span><input id="login-password" type="password" autocomplete="current-password" required></label>
+      <p class="dialog-error hidden" id="login-error"></p>
       <div class="dialog-actions">
-        <button class="button secondary" value="cancel" type="button" id="token-cancel">取消</button>
-        <button class="button primary" value="default" type="submit">连接</button>
+        <button class="button secondary" value="cancel" type="button" id="login-cancel">取消</button>
+        <button class="button primary" value="default" type="submit">登录</button>
       </div>
     </form>
   </dialog>

@@ -1,4 +1,11 @@
-use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Instant};
+use std::{
+    fs::{self, OpenOptions},
+    io::Write as _,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Instant,
+};
 
 use anyhow::{Context, Result, bail};
 use axum::{
@@ -8,17 +15,27 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
-use serde::Serialize;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tracing::{info, warn};
 
 use crate::{config::Config, server};
 
+const ADMIN_USERNAME: &str = "admin";
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AdminCredentials {
+    pub username: String,
+    pub password: String,
+}
+
 #[derive(Clone)]
 struct AdminState {
     config_path: Arc<PathBuf>,
     token: Arc<Option<Vec<u8>>>,
+    credentials_path: Arc<PathBuf>,
     runtime: Arc<RwLock<RuntimeState>>,
     write_lock: Arc<Mutex<()>>,
     commands: mpsc::Sender<Command>,
@@ -69,14 +86,18 @@ enum Command {
     Reload,
 }
 
-pub async fn run(config_path: PathBuf, listen: SocketAddr, token: Option<String>) -> Result<()> {
-    if !listen.ip().is_loopback() && token.as_deref().is_none_or(str::is_empty) {
-        bail!("an admin token is required when the WebUI listens outside loopback");
-    }
+pub async fn run(
+    config_path: PathBuf,
+    listen: SocketAddr,
+    token: Option<String>,
+    credentials_path: PathBuf,
+) -> Result<()> {
+    load_credentials(&credentials_path)?;
     let (commands, mut command_rx) = mpsc::channel(4);
     let state = AdminState {
         config_path: Arc::new(config_path.clone()),
         token: Arc::new(token.map(String::into_bytes)),
+        credentials_path: Arc::new(credentials_path),
         runtime: Arc::new(RwLock::new(RuntimeState::default())),
         write_lock: Arc::new(Mutex::new(())),
         commands,
@@ -240,7 +261,7 @@ async fn status(
     State(state): State<AdminState>,
     headers: HeaderMap,
 ) -> ApiResult<Json<StatusResponse>> {
-    authorize(&state, &headers)?;
+    authorize(&state, &headers).await?;
     let runtime = state.runtime.read().await;
     Ok(Json(StatusResponse {
         version: env!("CARGO_PKG_VERSION"),
@@ -263,7 +284,7 @@ async fn get_config(
     State(state): State<AdminState>,
     headers: HeaderMap,
 ) -> ApiResult<Json<Config>> {
-    authorize(&state, &headers)?;
+    authorize(&state, &headers).await?;
     let path = Arc::clone(&state.config_path);
     let config = tokio::task::spawn_blocking(move || Config::load(&path))
         .await
@@ -277,7 +298,7 @@ async fn put_config(
     headers: HeaderMap,
     Json(config): Json<Config>,
 ) -> ApiResult<Json<MutationResponse>> {
-    authorize(&state, &headers)?;
+    authorize(&state, &headers).await?;
     config.validate().map_err(ApiError::bad_request)?;
     let _guard = state.write_lock.lock().await;
     let path = Arc::clone(&state.config_path);
@@ -300,7 +321,7 @@ async fn reload(
     State(state): State<AdminState>,
     headers: HeaderMap,
 ) -> ApiResult<Json<MutationResponse>> {
-    authorize(&state, &headers)?;
+    authorize(&state, &headers).await?;
     Config::load(&state.config_path).map_err(ApiError::bad_request)?;
     state
         .commands
@@ -313,23 +334,121 @@ async fn reload(
     }))
 }
 
-fn authorize(state: &AdminState, headers: &HeaderMap) -> ApiResult<()> {
-    let Some(expected) = state.token.as_ref() else {
-        return Ok(());
-    };
-    let provided = headers
+async fn authorize(state: &AdminState, headers: &HeaderMap) -> ApiResult<()> {
+    let authorization = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
         .unwrap_or_default();
-    if bool::from(provided.as_bytes().ct_eq(expected)) {
-        Ok(())
-    } else {
-        Err(ApiError::new(
-            StatusCode::UNAUTHORIZED,
-            "invalid admin token",
-        ))
+    let valid_token = match (state.token.as_ref(), authorization.strip_prefix("Bearer ")) {
+        (Some(expected), Some(provided)) => bool::from(provided.as_bytes().ct_eq(expected)),
+        _ => false,
+    };
+    if valid_token {
+        return Ok(());
     }
+    if let Some((username, password)) = decode_basic_credentials(authorization) {
+        let contents = tokio::fs::read_to_string(state.credentials_path.as_ref())
+            .await
+            .map_err(ApiError::internal)?;
+        let credentials: AdminCredentials =
+            toml::from_str(&contents).map_err(ApiError::internal)?;
+        if bool::from(username.as_slice().ct_eq(credentials.username.as_bytes()))
+            & bool::from(password.as_slice().ct_eq(credentials.password.as_bytes()))
+        {
+            return Ok(());
+        }
+    }
+    Err(ApiError::new(
+        StatusCode::UNAUTHORIZED,
+        "invalid username or password",
+    ))
+}
+
+fn decode_basic_credentials(authorization: &str) -> Option<(Vec<u8>, Vec<u8>)> {
+    let encoded = authorization.strip_prefix("Basic ")?;
+    let decoded = STANDARD.decode(encoded).ok()?;
+    let separator = decoded.iter().position(|byte| *byte == b':')?;
+    Some((
+        decoded[..separator].to_vec(),
+        decoded[separator + 1..].to_vec(),
+    ))
+}
+
+pub fn load_or_create_credentials(path: &Path) -> Result<(AdminCredentials, bool)> {
+    match load_credentials(path) {
+        Ok(credentials) => Ok((credentials, false)),
+        Err(error)
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            let credentials = generated_credentials()?;
+            write_credentials(path, &credentials)?;
+            Ok((credentials, true))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+pub fn reset_credentials(path: &Path) -> Result<AdminCredentials> {
+    let credentials = generated_credentials()?;
+    write_credentials(path, &credentials)?;
+    Ok(credentials)
+}
+
+fn load_credentials(path: &Path) -> Result<AdminCredentials> {
+    let contents = fs::read_to_string(path)
+        .with_context(|| format!("read admin credentials {}", path.display()))?;
+    let credentials: AdminCredentials = toml::from_str(&contents)
+        .with_context(|| format!("parse admin credentials {}", path.display()))?;
+    if credentials.username != ADMIN_USERNAME || credentials.password.is_empty() {
+        bail!("admin credentials must use username {ADMIN_USERNAME} and a non-empty password");
+    }
+    Ok(credentials)
+}
+
+fn generated_credentials() -> Result<AdminCredentials> {
+    let mut random = [0_u8; 24];
+    getrandom::fill(&mut random).context("generate admin password")?;
+    let password = random
+        .iter()
+        .fold(String::with_capacity(48), |mut output, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(output, "{byte:02x}");
+            output
+        });
+    Ok(AdminCredentials {
+        username: ADMIN_USERNAME.to_owned(),
+        password,
+    })
+}
+
+fn write_credentials(path: &Path, credentials: &AdminCredentials) -> Result<()> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create admin credential directory {}", parent.display()))?;
+    }
+    let temporary = path.with_extension("tmp");
+    let contents = toml::to_string(credentials).context("serialize admin credentials")?;
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&temporary)
+        .with_context(|| format!("write admin credentials {}", temporary.display()))?;
+    file.write_all(contents.as_bytes())?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(&temporary, path)
+        .with_context(|| format!("replace admin credentials {}", path.display()))?;
+    Ok(())
 }
 
 type ApiResult<T> = std::result::Result<T, ApiError>;
@@ -363,5 +482,44 @@ impl IntoResponse for ApiError {
             Json(serde_json::json!({ "error": self.message })),
         )
             .into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn creates_and_resets_admin_credentials() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("admin.toml");
+        let (initial, created) = load_or_create_credentials(&path).unwrap();
+        assert!(created);
+        assert_eq!(initial.username, ADMIN_USERNAME);
+        assert_eq!(initial.password.len(), 48);
+
+        let (loaded, created) = load_or_create_credentials(&path).unwrap();
+        assert!(!created);
+        assert_eq!(loaded.password, initial.password);
+
+        let reset = reset_credentials(&path).unwrap();
+        assert_ne!(reset.password, initial.password);
+        assert_eq!(load_credentials(&path).unwrap().password, reset.password);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[test]
+    fn decodes_basic_credentials() {
+        let (username, password) = decode_basic_credentials("Basic YWRtaW46cGFzc3dvcmQ=").unwrap();
+        assert_eq!(username, b"admin");
+        assert_eq!(password, b"password");
     }
 }
