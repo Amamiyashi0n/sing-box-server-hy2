@@ -112,12 +112,15 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.5; }
 .user-index { color: var(--subtle); font-size: 10px; margin-bottom: 7px; }
 .empty { padding: 18px 0; color: var(--subtle); font-size: 12px; }
 .share-links { display: grid; gap: 8px; }
-.share-link-row { display: grid; grid-template-columns: minmax(110px, .32fr) minmax(0, 1.68fr) auto; gap: 10px; align-items: center; padding: 12px; border-radius: 8px; background: var(--surface); }
-.share-link-user { min-width: 0; }
-.share-link-user strong, .share-link-user span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.share-link-user strong { font-size: 13px; font-weight: 500; }
-.share-link-user span { margin-top: 3px; color: var(--subtle); font-size: 10px; }
-.share-link-row input { min-width: 0; background: #232323; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
+.share-link-card { min-width: 0; padding: 14px; border-radius: 8px; background: var(--surface); }
+.share-link-user { min-width: 0; padding-bottom: 11px; border-bottom: 1px solid var(--line); }
+.share-link-user strong { display: block; overflow: hidden; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.share-protocol { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 14px; padding-top: 12px; }
+.share-protocol-name { padding-top: 11px; color: var(--muted); font-size: 11px; font-weight: 600; }
+.share-link-fields { min-width: 0; display: grid; gap: 8px; }
+.share-link-line { min-width: 0; display: grid; grid-template-columns: 54px minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.share-link-line > span { color: var(--subtle); font-size: 11px; }
+.share-link-line input { min-width: 0; background: #232323; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
 .masquerade-panel { margin-top: 17px; padding-top: 17px; border-top: 1px solid var(--line-soft); }
 .admin-user-list { display: grid; gap: 8px; }
 .admin-user-row { display: grid; grid-template-columns: minmax(140px, .7fr) minmax(220px, 1.3fr) auto auto; gap: 9px; align-items: end; padding: 12px; border-radius: 8px; background: var(--surface); }
@@ -173,7 +176,12 @@ dialog::backdrop { background: rgba(0, 0, 0, .7); }
   .service-state { grid-column: 1 / -1; justify-content: center; }
   .metrics { grid-template-columns: 1fr 1fr; gap: 18px 14px; }
   .field-grid.two, .field-grid.three, .field-grid.four { grid-template-columns: 1fr; }
-  .user-row, .share-link-row { grid-template-columns: 1fr; }
+  .user-row { grid-template-columns: 1fr; }
+  .share-protocol { grid-template-columns: 1fr; gap: 7px; }
+  .share-protocol-name { padding-top: 0; }
+  .share-link-line { grid-template-columns: 1fr auto; }
+  .share-link-line > span { grid-column: 1 / -1; }
+  .share-link-line input { grid-column: 1; }
   .admin-user-row { grid-template-columns: 1fr auto auto; }
   .admin-user-row .field { grid-column: 1 / -1; grid-row: 2; }
   .converter-formats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -182,7 +190,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .7); }
   .converter-result { grid-template-columns: 1fr auto auto; }
   .converter-result input { grid-column: 1 / -1; grid-row: 2; }
   .heading-actions { gap: 10px; }
-  .user-row .button, .share-link-row .button { justify-self: start; }
+  .user-row .button { justify-self: start; }
   .mobile-save { display: block; }
   .mobile-save .button { width: 100%; min-height: 42px; }
 }

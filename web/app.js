@@ -5,6 +5,9 @@ const state = {
   password: "",
   timer: null,
   adminUsers: [],
+  shareShortLinks: new Map(),
+  shareShortLinkErrors: new Map(),
+  shareShortLinksPending: new Set(),
   converter: {
     source: localStorage.getItem("sublink-source") || "",
     format: localStorage.getItem("sublink-format") || "singbox",
@@ -143,6 +146,7 @@ async function loadConfig() {
   const type = config.masquerade?.type || "none";
   $("#masquerade-type").value = type;
   renderMasquerade(type, config.masquerade);
+  await generateShareShortLinks();
 }
 
 async function loadAdminUsers() {
@@ -294,11 +298,16 @@ function buildShareLink(user) {
   return `hysteria2://${encodeUserInfo(user.password)}@${shareHost(server)}:${port}/?${parameters}${fragment}`;
 }
 
+function currentShareLinks() {
+  return collectUsers(false)
+    .map(user => ({ user, link: buildShareLink(user) }))
+    .filter(item => item.link);
+}
+
 function renderShareLinks() {
   const target = $("#share-links");
   if (!target) return;
-  const users = collectUsers(false);
-  const links = users.map(user => ({ user, link: buildShareLink(user) })).filter(item => item.link);
+  const links = currentShareLinks();
   $("#link-count").textContent = `${links.length} 个链接`;
   if (!$("#share-server").value.trim()) {
     target.innerHTML = '<div class="empty">填写公网服务器后生成链接</div>';
@@ -309,20 +318,64 @@ function renderShareLinks() {
     return;
   }
   target.innerHTML = links.map((item, index) => `
-    <div class="share-link-row">
-      <div class="share-link-user"><strong>${escapeHtml(item.user.name || "未命名用户")}</strong><span>Hysteria 2</span></div>
-      <input aria-label="${escapeHtml(item.user.name || "用户")} 配置链接" readonly value="${escapeHtml(item.link)}">
-      <button class="button secondary compact" data-copy-link="${index}" type="button">复制</button>
-    </div>`).join("");
+    <article class="share-link-card">
+      <header class="share-link-user"><strong>${escapeHtml(item.user.name || "未命名用户")}</strong></header>
+      <div class="share-protocol">
+        <div class="share-protocol-name">HY2</div>
+        <div class="share-link-fields">
+          <div class="share-link-line">
+            <span>连接</span>
+            <input aria-label="${escapeHtml(item.user.name || "用户")} HY2 连接" readonly value="${escapeHtml(item.link)}">
+            <button class="button secondary compact" data-copy-link="${index}" data-link-kind="source" type="button">复制</button>
+          </div>
+          <div class="share-link-line">
+            <span>短链接</span>
+            <input aria-label="${escapeHtml(item.user.name || "用户")} HY2 短链接" readonly
+              value="${escapeHtml(state.shareShortLinks.get(item.link) || "")}"
+              placeholder="${state.shareShortLinksPending.has(item.link) ? "正在生成" : escapeHtml(state.shareShortLinkErrors.get(item.link) || "保存后生成")}">
+            <button class="button secondary compact" data-copy-link="${index}" data-link-kind="short" type="button" ${state.shareShortLinks.has(item.link) ? "" : "disabled"}>复制</button>
+          </div>
+        </div>
+      </div>
+    </article>`).join("");
   target.querySelectorAll("[data-copy-link]").forEach(button => button.addEventListener("click", async () => {
-    const link = links[Number(button.dataset.copyLink)].link;
+    const source = links[Number(button.dataset.copyLink)].link;
+    const link = button.dataset.linkKind === "short" ? state.shareShortLinks.get(source) : source;
+    if (!link) return;
     try {
       await navigator.clipboard.writeText(link);
-      toast("配置链接已复制");
+      toast(button.dataset.linkKind === "short" ? "短链接已复制" : "HY2 连接已复制");
     } catch {
       toast("复制失败，请手动选择链接", true);
     }
   }));
+}
+
+async function generateShareShortLinks() {
+  const missing = currentShareLinks().filter(item =>
+    !state.shareShortLinks.has(item.link) && !state.shareShortLinksPending.has(item.link)
+  );
+  if (!missing.length) return;
+  missing.forEach(item => state.shareShortLinksPending.add(item.link));
+  renderShareLinks();
+  await Promise.all(missing.map(async item => {
+    try {
+      const longUrl = new URL("/xray", window.location.origin);
+      longUrl.searchParams.set("config", item.link);
+      const shorten = new URL("/shorten-v2", window.location.origin);
+      shorten.searchParams.set("url", longUrl.toString());
+      const response = await fetch(shorten);
+      if (!response.ok) throw new Error(await response.text() || "短链接生成失败");
+      const code = (await response.text()).trim();
+      state.shareShortLinks.set(item.link, `${window.location.origin}/x/${encodeURIComponent(code)}`);
+      state.shareShortLinkErrors.delete(item.link);
+    } catch (error) {
+      state.shareShortLinkErrors.set(item.link, error.message || "短链接生成失败");
+    } finally {
+      state.shareShortLinksPending.delete(item.link);
+    }
+  }));
+  renderShareLinks();
 }
 
 function toggleObfs() {
@@ -486,6 +539,7 @@ async function saveConfig(event) {
     const payload = collectConfig();
     await api("/api/v1/config", { method: "PUT", body: JSON.stringify(payload) });
     state.config = payload;
+    await generateShareShortLinks();
     toast("配置已保存，HY2 服务正在重新加载");
     setTimeout(loadStatus, 450);
   } catch (error) { toast(error.message, true); }
