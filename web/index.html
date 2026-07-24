@@ -7,7 +7,17 @@
   <title>sing-box-ser-mini Console</title>
   <link rel="stylesheet" href="/app.css">
 </head>
-<body>
+<body class="auth-pending">
+  <div class="login-screen" id="login-screen">
+    <form id="login-form" class="login-panel" autocomplete="on">
+      <div class="login-brand"><strong>sing-box-ser-mini</strong><span>Hysteria 2</span></div>
+      <h1>登录</h1>
+      <label class="field"><span>用户名</span><input id="login-username" autocomplete="username" required autofocus></label>
+      <label class="field"><span>密码</span><input id="login-password" type="password" autocomplete="current-password" required></label>
+      <p class="dialog-error hidden" id="login-error"></p>
+      <button class="button primary login-submit" type="submit">登录</button>
+    </form>
+  </div>
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
@@ -169,18 +179,6 @@
     </main>
   </div>
 
-  <dialog id="login-dialog">
-    <form method="dialog" id="login-form" class="dialog-body">
-      <h2>登录</h2>
-      <label class="field"><span>用户名</span><input id="login-username" autocomplete="username" required autofocus></label>
-      <label class="field"><span>密码</span><input id="login-password" type="password" autocomplete="current-password" required></label>
-      <p class="dialog-error hidden" id="login-error"></p>
-      <div class="dialog-actions">
-        <button class="button secondary" value="cancel" type="button" id="login-cancel">取消</button>
-        <button class="button primary" value="default" type="submit">登录</button>
-      </div>
-    </form>
-  </dialog>
   <dialog id="admin-user-dialog">
     <form method="dialog" id="admin-user-form" class="dialog-body">
       <h2>添加管理账户</h2>

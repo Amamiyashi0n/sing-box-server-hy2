@@ -35,22 +35,32 @@ async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { ...authHeaders(Boolean(options.body)), ...(options.headers || {}) } });
   const payload = await response.json().catch(() => ({}));
   if (response.status === 401) {
-    const message = state.password ? "用户名或密码错误" : "请使用管理账户登录";
+    const message = state.password ? "用户名或密码错误" : "";
     state.password = "";
-    openLoginDialog(message);
+    openLoginScreen(message);
     throw new Error("需要登录");
   }
   if (!response.ok) throw new Error(payload.error || `请求失败 (${response.status})`);
   return payload;
 }
 
-function openLoginDialog(message = "") {
-  const dialog = $("#login-dialog");
+function openLoginScreen(message = "") {
+  document.body.classList.add("auth-pending");
+  $("#login-screen").classList.remove("hidden");
   $("#login-error").textContent = message;
   $("#login-error").classList.toggle("hidden", !message);
   $("#login-username").value = state.username;
   $("#login-password").value = "";
-  if (!dialog.open) dialog.showModal();
+  $("#login-username").focus();
+}
+
+function closeLoginScreen() {
+  $("#login-screen").classList.add("hidden");
+  document.body.classList.remove("auth-pending");
+}
+
+function loginScreenVisible() {
+  return document.body.classList.contains("auth-pending");
 }
 
 function toast(message, error = false) {
@@ -90,7 +100,7 @@ async function loadStatus() {
     $("#runtime-error").textContent = status.last_error || "";
     $("#runtime-error").classList.toggle("hidden", !status.last_error);
   } catch (error) {
-    if (!$("#login-dialog").open) toast(error.message, true);
+    if (!loginScreenVisible()) toast(error.message, true);
   }
 }
 
@@ -177,7 +187,7 @@ async function deleteAdminUser(event) {
     await api(`/api/v1/admin-users/${encodeURIComponent(username)}`, { method: "DELETE" });
     if (username === state.username) {
       state.password = "";
-      openLoginDialog("当前账户已删除，请使用其他账户登录");
+      openLoginScreen("当前账户已删除，请使用其他账户登录");
     } else {
       await loadAdminUsers();
       toast("管理账户已删除");
@@ -542,9 +552,8 @@ function bindEvents() {
   });
   $("#change-user").addEventListener("click", () => {
     state.password = "";
-    openLoginDialog();
+    openLoginScreen();
   });
-  $("#login-cancel").addEventListener("click", () => $("#login-dialog").close());
   $("#login-form").addEventListener("submit", async event => {
     event.preventDefault();
     state.username = $("#login-username").value.trim();
@@ -552,7 +561,7 @@ function bindEvents() {
     sessionStorage.setItem("admin-username", state.username);
     try {
       await Promise.all([loadConfig(), loadAdminUsers()]);
-      $("#login-dialog").close();
+      closeLoginScreen();
       await loadStatus();
     } catch (error) {
       $("#login-error").textContent = error.message;
@@ -571,7 +580,7 @@ async function initialize() {
   try {
     await Promise.all([loadConfig(), loadStatus(), loadAdminUsers()]);
   } catch (error) {
-    if (!$("#login-dialog").open) toast(error.message, true);
+    if (!loginScreenVisible()) toast(error.message, true);
   }
   state.timer = setInterval(loadStatus, 5000);
 }
