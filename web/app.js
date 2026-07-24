@@ -1,7 +1,7 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const state = {
   config: null,
-  username: sessionStorage.getItem("admin-username") || "admin",
+  username: "",
   password: "",
   timer: null,
   adminUsers: [],
@@ -49,7 +49,7 @@ function openLoginScreen(message = "") {
   $("#login-screen").classList.remove("hidden");
   $("#login-error").textContent = message;
   $("#login-error").classList.toggle("hidden", !message);
-  $("#login-username").value = state.username;
+  $("#login-username").value = "";
   $("#login-password").value = "";
   $("#login-username").focus();
 }
@@ -558,7 +558,6 @@ function bindEvents() {
     event.preventDefault();
     state.username = $("#login-username").value.trim();
     state.password = $("#login-password").value;
-    sessionStorage.setItem("admin-username", state.username);
     try {
       await Promise.all([loadConfig(), loadAdminUsers()]);
       closeLoginScreen();
