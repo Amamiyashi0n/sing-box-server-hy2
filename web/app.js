@@ -45,13 +45,19 @@ async function api(path, options = {}) {
 }
 
 function openLoginScreen(message = "") {
+  const alreadyVisible = loginScreenVisible();
+  stopStatusPolling();
   document.body.classList.add("auth-pending");
   $("#login-screen").classList.remove("hidden");
-  $("#login-error").textContent = message;
-  $("#login-error").classList.toggle("hidden", !message);
-  $("#login-username").value = "";
-  $("#login-password").value = "";
-  $("#login-username").focus();
+  if (message || !alreadyVisible) {
+    $("#login-error").textContent = message;
+    $("#login-error").classList.toggle("hidden", !message);
+  }
+  if (!alreadyVisible) {
+    $("#login-username").value = "";
+    $("#login-password").value = "";
+    $("#login-username").focus();
+  }
 }
 
 function closeLoginScreen() {
@@ -61,6 +67,17 @@ function closeLoginScreen() {
 
 function loginScreenVisible() {
   return document.body.classList.contains("auth-pending");
+}
+
+function startStatusPolling() {
+  if (state.timer !== null) return;
+  state.timer = setInterval(loadStatus, 5000);
+}
+
+function stopStatusPolling() {
+  if (state.timer === null) return;
+  clearInterval(state.timer);
+  state.timer = null;
 }
 
 function toast(message, error = false) {
@@ -558,13 +575,18 @@ function bindEvents() {
     event.preventDefault();
     state.username = $("#login-username").value.trim();
     state.password = $("#login-password").value;
+    $("#login-error").textContent = "";
+    $("#login-error").classList.add("hidden");
     try {
       await Promise.all([loadConfig(), loadAdminUsers()]);
       closeLoginScreen();
       await loadStatus();
+      startStatusPolling();
     } catch (error) {
-      $("#login-error").textContent = error.message;
-      $("#login-error").classList.remove("hidden");
+      if (!$("#login-error").textContent) {
+        $("#login-error").textContent = error.message;
+        $("#login-error").classList.remove("hidden");
+      }
     }
   });
   document.querySelectorAll("nav a").forEach(link => link.addEventListener("click", () => {
@@ -576,12 +598,6 @@ function bindEvents() {
 async function initialize() {
   bindEvents();
   renderConverter();
-  try {
-    await Promise.all([loadConfig(), loadStatus(), loadAdminUsers()]);
-  } catch (error) {
-    if (!loginScreenVisible()) toast(error.message, true);
-  }
-  state.timer = setInterval(loadStatus, 5000);
 }
 
 initialize();
