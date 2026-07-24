@@ -18,6 +18,7 @@
         <a href="#network">监听与 TLS</a>
         <a href="#users">认证用户</a>
         <a href="#links">客户端链接</a>
+        <a href="#admin-users">管理账户</a>
         <a href="#converter">订阅转换</a>
         <a href="#transport">传输策略</a>
         <a href="#masquerade">Masquerade</a>
@@ -129,6 +130,17 @@
         </div>
       </form>
 
+      <section class="config-section" id="admin-users" aria-labelledby="admin-users-title">
+        <div class="section-heading">
+          <h2 id="admin-users-title">管理账户</h2>
+          <div class="heading-actions">
+            <span id="admin-user-count">0 个账户</span>
+            <button class="button secondary compact" id="add-admin-user" type="button">添加账户</button>
+          </div>
+        </div>
+        <div class="admin-user-list" id="admin-user-list"></div>
+      </section>
+
       <section class="config-section converter-section" id="converter" aria-labelledby="converter-title">
         <div class="section-heading">
           <h2 id="converter-title">订阅转换</h2>
@@ -166,6 +178,18 @@
       <div class="dialog-actions">
         <button class="button secondary" value="cancel" type="button" id="login-cancel">取消</button>
         <button class="button primary" value="default" type="submit">登录</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="admin-user-dialog">
+    <form method="dialog" id="admin-user-form" class="dialog-body">
+      <h2>添加管理账户</h2>
+      <label class="field"><span>用户名</span><input id="new-admin-username" autocomplete="off" maxlength="64" required></label>
+      <label class="field"><span>密码</span><input id="new-admin-password" type="password" autocomplete="new-password" maxlength="256" required></label>
+      <p class="dialog-error hidden" id="admin-user-error"></p>
+      <div class="dialog-actions">
+        <button class="button secondary" value="cancel" type="button" id="admin-user-cancel">取消</button>
+        <button class="button primary" value="default" type="submit">添加</button>
       </div>
     </form>
   </dialog>

@@ -48,6 +48,13 @@ target/release/sing-box-ser-mini \
 The new password takes effect immediately because API authentication reads the
 credential file on each request.
 
+The **Management accounts** section can add multiple WebUI users, change each
+password independently, and remove users while preventing deletion of the last
+administrator. Existing single-user credential files are migrated to the
+multi-user `[[users]]` format on the first account change. The reset command
+updates or creates only the user selected by `--admin-username` and preserves
+all other accounts.
+
 The runtime uses up to four Tokio worker threads by default. Override this for
 larger hosts with `--worker-threads N` after measuring the actual workload.
 

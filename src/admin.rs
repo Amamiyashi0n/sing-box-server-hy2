@@ -31,6 +31,18 @@ pub struct AdminCredentials {
     pub password: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct AdminCredentialsFile {
+    users: Vec<AdminCredentials>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum AdminCredentialsDocument {
+    Multiple(AdminCredentialsFile),
+    Legacy(AdminCredentials),
+}
+
 #[derive(Clone)]
 struct AdminState {
     config_path: Arc<PathBuf>,
@@ -38,6 +50,7 @@ struct AdminState {
     credentials_path: Arc<PathBuf>,
     runtime: Arc<RwLock<RuntimeState>>,
     write_lock: Arc<Mutex<()>>,
+    credentials_lock: Arc<Mutex<()>>,
     commands: mpsc::Sender<Command>,
     sublink: Arc<SublinkService>,
 }
@@ -82,6 +95,22 @@ struct MutationResponse {
     message: &'static str,
 }
 
+#[derive(Serialize)]
+struct AdminUsersResponse {
+    users: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct AddAdminUserRequest {
+    username: String,
+    password: String,
+}
+
+#[derive(Deserialize)]
+struct ChangeAdminPasswordRequest {
+    password: String,
+}
+
 #[derive(Clone, Copy)]
 enum Command {
     Reload,
@@ -101,6 +130,7 @@ pub async fn run(
         credentials_path: Arc::new(credentials_path),
         runtime: Arc::new(RwLock::new(RuntimeState::default())),
         write_lock: Arc::new(Mutex::new(())),
+        credentials_lock: Arc::new(Mutex::new(())),
         commands,
         sublink: Arc::new(SublinkService::default()),
     };
@@ -212,6 +242,14 @@ fn router(state: AdminState) -> Router {
         .route("/api/v1/status", get(status))
         .route("/api/v1/config", get(get_config).put(put_config))
         .route("/api/v1/reload", post(reload))
+        .route(
+            "/api/v1/admin-users",
+            get(list_admin_users).post(add_admin_user),
+        )
+        .route(
+            "/api/v1/admin-users/{username}",
+            axum::routing::put(change_admin_password).delete(delete_admin_user),
+        )
         .route("/singbox", get(sublink_singbox))
         .route("/clash", get(sublink_clash))
         .route("/surge", get(sublink_surge))
@@ -344,6 +382,103 @@ async fn reload(
     }))
 }
 
+async fn list_admin_users(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<AdminUsersResponse>> {
+    authorize(&state, &headers).await?;
+    let credentials = load_credentials(&state.credentials_path).map_err(ApiError::internal)?;
+    Ok(Json(AdminUsersResponse {
+        users: credentials
+            .users
+            .into_iter()
+            .map(|user| user.username)
+            .collect(),
+    }))
+}
+
+async fn add_admin_user(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Json(request): Json<AddAdminUserRequest>,
+) -> ApiResult<Json<MutationResponse>> {
+    authorize(&state, &headers).await?;
+    let username = request.username.trim().to_owned();
+    let user = AdminCredentials {
+        username,
+        password: request.password,
+    };
+    ensure_admin_user(&user).map_err(ApiError::bad_request)?;
+    let _guard = state.credentials_lock.lock().await;
+    let mut credentials = load_credentials(&state.credentials_path).map_err(ApiError::internal)?;
+    if credentials
+        .users
+        .iter()
+        .any(|existing| existing.username == user.username)
+    {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "admin username already exists",
+        ));
+    }
+    credentials.users.push(user);
+    write_credentials(&state.credentials_path, &credentials).map_err(ApiError::internal)?;
+    Ok(Json(MutationResponse {
+        accepted: true,
+        message: "admin user added",
+    }))
+}
+
+async fn change_admin_password(
+    State(state): State<AdminState>,
+    AxumPath(username): AxumPath<String>,
+    headers: HeaderMap,
+    Json(request): Json<ChangeAdminPasswordRequest>,
+) -> ApiResult<Json<MutationResponse>> {
+    authorize(&state, &headers).await?;
+    let _guard = state.credentials_lock.lock().await;
+    let mut credentials = load_credentials(&state.credentials_path).map_err(ApiError::internal)?;
+    let Some(user) = credentials
+        .users
+        .iter_mut()
+        .find(|user| user.username == username)
+    else {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "admin user not found"));
+    };
+    user.password = request.password;
+    ensure_admin_user(user).map_err(ApiError::bad_request)?;
+    write_credentials(&state.credentials_path, &credentials).map_err(ApiError::internal)?;
+    Ok(Json(MutationResponse {
+        accepted: true,
+        message: "admin password changed",
+    }))
+}
+
+async fn delete_admin_user(
+    State(state): State<AdminState>,
+    AxumPath(username): AxumPath<String>,
+    headers: HeaderMap,
+) -> ApiResult<Json<MutationResponse>> {
+    authorize(&state, &headers).await?;
+    let _guard = state.credentials_lock.lock().await;
+    let mut credentials = load_credentials(&state.credentials_path).map_err(ApiError::internal)?;
+    if credentials.users.len() <= 1 {
+        return Err(ApiError::bad_request(
+            "the last admin user cannot be deleted",
+        ));
+    }
+    let previous = credentials.users.len();
+    credentials.users.retain(|user| user.username != username);
+    if credentials.users.len() == previous {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "admin user not found"));
+    }
+    write_credentials(&state.credentials_path, &credentials).map_err(ApiError::internal)?;
+    Ok(Json(MutationResponse {
+        accepted: true,
+        message: "admin user deleted",
+    }))
+}
+
 async fn sublink_singbox(state: State<AdminState>, uri: OriginalUri) -> Response {
     sublink_convert("singbox", state, uri)
 }
@@ -472,11 +607,11 @@ async fn authorize(state: &AdminState, headers: &HeaderMap) -> ApiResult<()> {
         let contents = tokio::fs::read_to_string(state.credentials_path.as_ref())
             .await
             .map_err(ApiError::internal)?;
-        let credentials: AdminCredentials =
-            toml::from_str(&contents).map_err(ApiError::internal)?;
-        if bool::from(username.as_slice().ct_eq(credentials.username.as_bytes()))
-            & bool::from(password.as_slice().ct_eq(credentials.password.as_bytes()))
-        {
+        let credentials = parse_credentials(&contents).map_err(ApiError::internal)?;
+        if credentials.users.iter().any(|user| {
+            bool::from(username.as_slice().ct_eq(user.username.as_bytes()))
+                & bool::from(password.as_slice().ct_eq(user.password.as_bytes()))
+        }) {
             return Ok(());
         }
     }
@@ -498,14 +633,15 @@ fn decode_basic_credentials(authorization: &str) -> Option<(Vec<u8>, Vec<u8>)> {
 
 pub fn load_or_create_credentials(path: &Path, username: &str) -> Result<(AdminCredentials, bool)> {
     match load_credentials(path) {
-        Ok(credentials) => Ok((credentials, false)),
-        Err(error)
-            if error
-                .downcast_ref::<std::io::Error>()
-                .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
-        {
+        Ok(credentials) => Ok((credentials.users[0].clone(), false)),
+        Err(error) if is_not_found(&error) => {
             let credentials = generated_credentials(username)?;
-            write_credentials(path, &credentials)?;
+            write_credentials(
+                path,
+                &AdminCredentialsFile {
+                    users: vec![credentials.clone()],
+                },
+            )?;
             Ok((credentials, true))
         }
         Err(error) => Err(error),
@@ -514,15 +650,37 @@ pub fn load_or_create_credentials(path: &Path, username: &str) -> Result<(AdminC
 
 pub fn reset_credentials(path: &Path, username: &str) -> Result<AdminCredentials> {
     let credentials = generated_credentials(username)?;
-    write_credentials(path, &credentials)?;
+    let mut file = match load_credentials(path) {
+        Ok(file) => file,
+        Err(error) if is_not_found(&error) => AdminCredentialsFile { users: Vec::new() },
+        Err(error) => return Err(error),
+    };
+    if let Some(existing) = file
+        .users
+        .iter_mut()
+        .find(|user| user.username == credentials.username)
+    {
+        existing.password.clone_from(&credentials.password);
+    } else {
+        file.users.push(credentials.clone());
+    }
+    write_credentials(path, &file)?;
     Ok(credentials)
 }
 
-fn load_credentials(path: &Path) -> Result<AdminCredentials> {
+fn load_credentials(path: &Path) -> Result<AdminCredentialsFile> {
     let contents = fs::read_to_string(path)
         .with_context(|| format!("read admin credentials {}", path.display()))?;
-    let credentials: AdminCredentials = toml::from_str(&contents)
-        .with_context(|| format!("parse admin credentials {}", path.display()))?;
+    parse_credentials(&contents)
+        .with_context(|| format!("parse admin credentials {}", path.display()))
+}
+
+fn parse_credentials(contents: &str) -> Result<AdminCredentialsFile> {
+    let document: AdminCredentialsDocument = toml::from_str(contents)?;
+    let credentials = match document {
+        AdminCredentialsDocument::Multiple(credentials) => credentials,
+        AdminCredentialsDocument::Legacy(user) => AdminCredentialsFile { users: vec![user] },
+    };
     ensure_credentials(&credentials)?;
     Ok(credentials)
 }
@@ -547,14 +705,40 @@ fn generated_credentials(username: &str) -> Result<AdminCredentials> {
     })
 }
 
-fn ensure_credentials(credentials: &AdminCredentials) -> Result<()> {
-    if credentials.username.trim().is_empty() || credentials.password.is_empty() {
-        bail!("admin credentials require a non-empty username and password");
+fn ensure_admin_user(user: &AdminCredentials) -> Result<()> {
+    if user.username.trim().is_empty()
+        || user.username.len() > 64
+        || user.username.contains(':')
+        || user.username.chars().any(char::is_control)
+    {
+        bail!("admin username must be 1-64 characters without colons or control characters");
+    }
+    if user.password.is_empty() || user.password.len() > 256 {
+        bail!("admin password must be 1-256 characters");
     }
     Ok(())
 }
 
-fn write_credentials(path: &Path, credentials: &AdminCredentials) -> Result<()> {
+fn ensure_credentials(credentials: &AdminCredentialsFile) -> Result<()> {
+    if credentials.users.is_empty() {
+        bail!("at least one admin user is required");
+    }
+    for user in &credentials.users {
+        ensure_admin_user(user)?;
+    }
+    for (index, user) in credentials.users.iter().enumerate() {
+        if credentials.users[..index]
+            .iter()
+            .any(|existing| existing.username == user.username)
+        {
+            bail!("duplicate admin username {}", user.username);
+        }
+    }
+    Ok(())
+}
+
+fn write_credentials(path: &Path, credentials: &AdminCredentialsFile) -> Result<()> {
+    ensure_credentials(credentials)?;
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -580,6 +764,12 @@ fn write_credentials(path: &Path, credentials: &AdminCredentials) -> Result<()> 
     fs::rename(&temporary, path)
         .with_context(|| format!("replace admin credentials {}", path.display()))?;
     Ok(())
+}
+
+fn is_not_found(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
 }
 
 type ApiResult<T> = std::result::Result<T, ApiError>;
@@ -636,7 +826,11 @@ mod tests {
         let reset = reset_credentials(&path, "operator").unwrap();
         assert_eq!(reset.username, "operator");
         assert_ne!(reset.password, initial.password);
-        assert_eq!(load_credentials(&path).unwrap().password, reset.password);
+        let users = load_credentials(&path).unwrap().users;
+        assert_eq!(users.len(), 2);
+        assert_eq!(users[0].username, DEFAULT_ADMIN_USERNAME);
+        assert_eq!(users[0].password, initial.password);
+        assert_eq!(users[1].password, reset.password);
 
         #[cfg(unix)]
         {
@@ -646,6 +840,14 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    #[test]
+    fn reads_legacy_single_user_credentials() {
+        let credentials =
+            parse_credentials("username = \"legacy\"\npassword = \"legacy-password\"\n").unwrap();
+        assert_eq!(credentials.users.len(), 1);
+        assert_eq!(credentials.users[0].username, "legacy");
     }
 
     #[test]

@@ -68,6 +68,7 @@ h2 { font-size: 16px; font-weight: 600; }
 .section-heading { min-height: 32px; display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
 .section-heading > span { color: var(--subtle); font-size: 12px; }
 .heading-actions { display: flex; align-items: center; gap: 14px; }
+.heading-actions > span { color: var(--subtle); font-size: 12px; }
 .metrics { display: grid; grid-template-columns: 1.35fr .65fr 1fr .8fr; gap: 22px; padding: 18px 0; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
 .metrics article { min-width: 0; }
 .metrics span, .field > span, .toggle-field > span { display: block; margin-bottom: 8px; color: var(--muted); font-size: 12px; }
@@ -111,6 +112,11 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.5; }
 .share-link-user span { margin-top: 3px; color: var(--subtle); font-size: 10px; }
 .share-link-row input { min-width: 0; background: #232323; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
 .masquerade-panel { margin-top: 17px; padding-top: 17px; border-top: 1px solid var(--line-soft); }
+.admin-user-list { display: grid; gap: 8px; }
+.admin-user-row { display: grid; grid-template-columns: minmax(140px, .7fr) minmax(220px, 1.3fr) auto auto; gap: 9px; align-items: end; padding: 12px; border-radius: 8px; background: var(--surface); }
+.admin-user-name { min-width: 0; min-height: 40px; display: flex; align-items: center; gap: 8px; }
+.admin-user-name strong { overflow: hidden; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.current-user { padding: 3px 6px; border-radius: 4px; background: #3b3b3b; color: var(--muted); font-size: 10px; white-space: nowrap; }
 .converter-source { min-height: 190px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; line-height: 1.65; }
 .converter-tools { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 14px; }
 .converter-formats { display: grid; grid-template-columns: repeat(4, minmax(84px, 1fr)); gap: 5px; padding: 4px; border-radius: 7px; background: var(--surface); }
@@ -160,6 +166,8 @@ dialog::backdrop { background: rgba(0, 0, 0, .7); }
   .metrics { grid-template-columns: 1fr 1fr; gap: 18px 14px; }
   .field-grid.two, .field-grid.three, .field-grid.four { grid-template-columns: 1fr; }
   .user-row, .share-link-row { grid-template-columns: 1fr; }
+  .admin-user-row { grid-template-columns: 1fr auto auto; }
+  .admin-user-row .field { grid-column: 1 / -1; grid-row: 2; }
   .converter-formats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .converter-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .converter-actions .button.primary { grid-column: 1 / -1; }

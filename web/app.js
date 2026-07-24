@@ -4,6 +4,7 @@ const state = {
   username: sessionStorage.getItem("admin-username") || "admin",
   password: "",
   timer: null,
+  adminUsers: [],
   converter: {
     source: localStorage.getItem("sublink-source") || "",
     format: localStorage.getItem("sublink-format") || "singbox",
@@ -115,6 +116,76 @@ async function loadConfig() {
   const type = config.masquerade?.type || "none";
   $("#masquerade-type").value = type;
   renderMasquerade(type, config.masquerade);
+}
+
+async function loadAdminUsers() {
+  const response = await api("/api/v1/admin-users");
+  state.adminUsers = response.users || [];
+  renderAdminUsers();
+}
+
+function renderAdminUsers() {
+  const target = $("#admin-user-list");
+  $("#admin-user-count").textContent = `${state.adminUsers.length} 个账户`;
+  if (!state.adminUsers.length) {
+    target.innerHTML = '<div class="empty">没有管理账户</div>';
+    return;
+  }
+  target.innerHTML = state.adminUsers.map(username => `
+    <div class="admin-user-row" data-admin-username="${escapeHtml(username)}">
+      <div class="admin-user-name"><strong>${escapeHtml(username)}</strong>${username === state.username ? '<span class="current-user">当前</span>' : ""}</div>
+      <label class="field"><span>新密码</span><input data-admin-password type="password" autocomplete="new-password" maxlength="256" placeholder="输入后修改"></label>
+      <button class="button secondary compact" data-change-admin-password type="button">修改密码</button>
+      <button class="button danger compact" data-delete-admin-user type="button">删除</button>
+    </div>`).join("");
+  target.querySelectorAll("[data-change-admin-password]").forEach(button => button.addEventListener("click", changeAdminPassword));
+  target.querySelectorAll("[data-delete-admin-user]").forEach(button => button.addEventListener("click", deleteAdminUser));
+}
+
+async function changeAdminPassword(event) {
+  const row = event.currentTarget.closest("[data-admin-username]");
+  const username = row.dataset.adminUsername;
+  const input = $("[data-admin-password]", row);
+  const password = input.value;
+  if (!password) {
+    toast("请输入新密码", true);
+    input.focus();
+    return;
+  }
+  event.currentTarget.disabled = true;
+  try {
+    await api(`/api/v1/admin-users/${encodeURIComponent(username)}`, {
+      method: "PUT",
+      body: JSON.stringify({ password })
+    });
+    if (username === state.username) state.password = password;
+    input.value = "";
+    toast("管理密码已修改");
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    event.currentTarget.disabled = false;
+  }
+}
+
+async function deleteAdminUser(event) {
+  const row = event.currentTarget.closest("[data-admin-username]");
+  const username = row.dataset.adminUsername;
+  if (!window.confirm(`删除管理账户 ${username}？`)) return;
+  event.currentTarget.disabled = true;
+  try {
+    await api(`/api/v1/admin-users/${encodeURIComponent(username)}`, { method: "DELETE" });
+    if (username === state.username) {
+      state.password = "";
+      openLoginDialog("当前账户已删除，请使用其他账户登录");
+    } else {
+      await loadAdminUsers();
+      toast("管理账户已删除");
+    }
+  } catch (error) {
+    toast(error.message, true);
+    event.currentTarget.disabled = false;
+  }
 }
 
 function escapeHtml(value) {
@@ -445,6 +516,30 @@ function bindEvents() {
       setConverterStatus("无法读取剪贴板", true);
     }
   });
+  $("#add-admin-user").addEventListener("click", () => {
+    $("#new-admin-username").value = "";
+    $("#new-admin-password").value = "";
+    $("#admin-user-error").classList.add("hidden");
+    $("#admin-user-dialog").showModal();
+  });
+  $("#admin-user-cancel").addEventListener("click", () => $("#admin-user-dialog").close());
+  $("#admin-user-form").addEventListener("submit", async event => {
+    event.preventDefault();
+    const username = $("#new-admin-username").value.trim();
+    const password = $("#new-admin-password").value;
+    try {
+      await api("/api/v1/admin-users", {
+        method: "POST",
+        body: JSON.stringify({ username, password })
+      });
+      $("#admin-user-dialog").close();
+      await loadAdminUsers();
+      toast("管理账户已添加");
+    } catch (error) {
+      $("#admin-user-error").textContent = error.message;
+      $("#admin-user-error").classList.remove("hidden");
+    }
+  });
   $("#change-user").addEventListener("click", () => {
     state.password = "";
     openLoginDialog();
@@ -456,7 +551,7 @@ function bindEvents() {
     state.password = $("#login-password").value;
     sessionStorage.setItem("admin-username", state.username);
     try {
-      await loadConfig();
+      await Promise.all([loadConfig(), loadAdminUsers()]);
       $("#login-dialog").close();
       await loadStatus();
     } catch (error) {
@@ -474,7 +569,7 @@ async function initialize() {
   bindEvents();
   renderConverter();
   try {
-    await Promise.all([loadConfig(), loadStatus()]);
+    await Promise.all([loadConfig(), loadStatus(), loadAdminUsers()]);
   } catch (error) {
     if (!$("#login-dialog").open) toast(error.message, true);
   }
