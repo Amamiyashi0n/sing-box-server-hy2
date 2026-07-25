@@ -269,11 +269,14 @@ impl SublinkService {
     pub async fn shorten_hy2(&self, raw_url: &str) -> Result<String> {
         let url = Url::parse(raw_url).map_err(|_| anyhow!("invalid URL parameter"))?;
         ensure!(url.path() == "/xray", "invalid HY2 URL parameter");
-        let mut config = query_value(&url, &["config"]);
-        if let Some(fragment) = url.fragment() {
-            config.push('#');
-            config.push_str(fragment);
-        }
+        let raw_config = raw_url
+            .split_once("?config=")
+            .map(|(_, value)| value)
+            .ok_or_else(|| anyhow!("invalid HY2 URL parameter"))?;
+        let config = percent_decode_str(raw_config)
+            .decode_utf8()
+            .map_err(|_| anyhow!("invalid HY2 URL parameter"))?
+            .into_owned();
         ensure!(
             config.starts_with("hysteria2://"),
             "invalid HY2 URL parameter"
