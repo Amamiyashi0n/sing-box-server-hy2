@@ -142,7 +142,7 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.5; }
 .admin-user-name strong { overflow: hidden; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .current-user { padding: 3px 6px; border-radius: 4px; background: #3b3b3b; color: var(--muted); font-size: 10px; white-space: nowrap; }
 @media (min-width: 621px) {
-  .admin-user-name { min-height: 68px; align-self: stretch; }
+  .admin-user-name { min-height: 20px; align-self: start; padding-top: 1px; }
 }
 .converter-source { min-height: 190px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; line-height: 1.65; }
 .converter-rules { margin-top: 14px; }
