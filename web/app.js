@@ -406,7 +406,7 @@ async function generateShareShortLinks() {
       const response = await fetch(shorten);
       if (!response.ok) throw new Error(await response.text() || "短链接生成失败");
       const code = (await response.text()).trim();
-      state.shareShortLinks.set(item.link, `${window.location.origin}/x/${encodeURIComponent(code)}`);
+      state.shareShortLinks.set(item.link, `${window.location.origin}/sub/${encodeURIComponent(code)}`);
       state.shareShortLinkErrors.delete(item.link);
     } catch (error) {
       state.shareShortLinkErrors.set(item.link, error.message || "短链接生成失败");

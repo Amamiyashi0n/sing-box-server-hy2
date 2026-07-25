@@ -270,6 +270,7 @@ fn router(state: AdminState) -> Router {
         .route("/xray", get(sublink_xray))
         .route("/shorten-v2", get(sublink_shorten))
         .route("/shorten-hy2", get(sublink_shorten_hy2))
+        .route("/sub/{code}", get(sublink_auto))
         .route("/resolve", get(sublink_resolve))
         .route("/subconverter", get(sublink_subconverter))
         .route("/{prefix}/{code}", get(sublink_redirect))
@@ -557,6 +558,33 @@ async fn sublink_shorten_hy2(
     };
     match state.sublink.shorten_hy2(&url).await {
         Ok(code) => ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], code).into_response(),
+        Err(error) => sublink_error(sublink_status(&error), error),
+    }
+}
+
+async fn sublink_auto(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    AxumPath(code): AxumPath<String>,
+) -> Response {
+    let user_agent = headers
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    let accept = headers
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    match state.sublink.auto(&code, user_agent, accept).await {
+        Ok(output) => (
+            [
+                (header::CONTENT_TYPE, output.content_type),
+                (header::CACHE_CONTROL, "no-store"),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            ],
+            output.body,
+        )
+            .into_response(),
         Err(error) => sublink_error(sublink_status(&error), error),
     }
 }

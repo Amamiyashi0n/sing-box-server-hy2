@@ -307,6 +307,21 @@ impl SublinkService {
         Ok(format!("/{format}{query}"))
     }
 
+    pub async fn auto(&self, code: &str, user_agent: &str, accept: &str) -> Result<SublinkOutput> {
+        ensure!(valid_code(code), "invalid short URL");
+        let query = self
+            .store
+            .lock()
+            .await
+            .get(code)
+            .ok_or_else(|| anyhow!("short URL not found"))?;
+        let url = Url::parse(&format!("https://short.local/xray{query}"))
+            .map_err(|_| anyhow!("invalid short URL"))?;
+        let config = query_value(&url, &["config"]);
+        ensure!(config.starts_with("hysteria2://"), "invalid HY2 short URL");
+        self.convert(auto_format(user_agent, accept), &config)
+    }
+
     pub async fn resolve(&self, raw_url: &str) -> Result<String> {
         let url = Url::parse(raw_url).map_err(|_| anyhow!("invalid short URL"))?;
         let (prefix, code) = split_short_path(url.path())?;
@@ -802,6 +817,23 @@ fn format_for_prefix(prefix: &str) -> Option<&'static str> {
     }
 }
 
+fn auto_format(user_agent: &str, accept: &str) -> &'static str {
+    let user_agent = user_agent.to_ascii_lowercase();
+    let accept = accept.to_ascii_lowercase();
+    if user_agent.contains("clash") || user_agent.contains("mihomo") || accept.contains("yaml") {
+        "clash"
+    } else if user_agent.contains("surge") {
+        "surge"
+    } else if user_agent.contains("sing-box")
+        || user_agent.contains("singbox")
+        || accept.contains("json")
+    {
+        "singbox"
+    } else {
+        "xray"
+    }
+}
+
 fn split_short_path(path: &str) -> Result<(&str, &str)> {
     let mut parts = path.trim_start_matches('/').split('/');
     let prefix = parts.next().unwrap_or_default();
@@ -945,5 +977,36 @@ mod tests {
 
         let second = SublinkService::with_persistence(path).unwrap();
         assert_eq!(second.redirect("x", &code).await.unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn automatic_hy2_short_links_match_client_format() {
+        let service = SublinkService::default();
+        let config = "hysteria2://password@example.com:443/?insecure=1#user";
+        let raw = format!(
+            "https://example.com/xray?config={}",
+            url::form_urlencoded::byte_serialize(config.as_bytes()).collect::<String>()
+        );
+        let code = service.shorten_hy2(&raw).await.unwrap();
+        assert!(
+            service
+                .auto(&code, "Clash Meta", "")
+                .await
+                .unwrap()
+                .body
+                .contains("proxies:")
+        );
+        assert!(
+            service
+                .auto(&code, "sing-box", "")
+                .await
+                .unwrap()
+                .body
+                .contains("outbounds")
+        );
+        assert_eq!(
+            service.auto(&code, "xray", "").await.unwrap().content_type,
+            "text/plain; charset=utf-8"
+        );
     }
 }
