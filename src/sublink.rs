@@ -729,8 +729,9 @@ fn singbox_node(node: &Node) -> Value {
 }
 
 fn render_clash(nodes: &[Node]) -> String {
-    let mut output =
-        String::from("mixed-port: 7890\nmode: rule\nallow-lan: false\nlog-level: warn\nproxies:\n");
+    let mut output = String::from(
+        "mixed-port: 7890\nmode: rule\nallow-lan: false\nlog-level: warning\nproxies:\n",
+    );
     for node in nodes {
         let _ = writeln!(output, "  - name: {}", yaml_quote(&node.name));
         let kind = if node.kind == "shadowsocks" {
@@ -754,10 +755,11 @@ fn render_clash(nodes: &[Node]) -> String {
             _ => yaml_field(&mut output, "password", &node.password),
         }
         if node.tls {
-            output.push_str("    tls: true\n");
             if node.kind == "hysteria2" {
                 yaml_field(&mut output, "sni", &node.sni);
+                output.push_str("    alpn:\n      - h3\n");
             } else {
+                output.push_str("    tls: true\n");
                 yaml_field(&mut output, "servername", &node.sni);
             }
             if node.insecure {
@@ -1043,11 +1045,20 @@ mod tests {
             url::form_urlencoded::byte_serialize(config.as_bytes()).collect::<String>()
         );
         let code = service.shorten_hy2(&raw).await.unwrap();
-        for user_agent in ["Clash Meta", "Clash Verge Rev"] {
+        for user_agent in [
+            "Clash Meta",
+            "Clash Verge Rev",
+            "ClashMetaForAndroid/2.11.28",
+            "mihomo/1.19.12",
+        ] {
             let body = service.auto(&code, user_agent, "").await.unwrap().body;
             assert!(body.contains("proxies:"));
+            assert!(body.contains("log-level: warning"));
+            assert!(body.contains("type: 'hysteria2'"));
             assert!(body.contains("sni: 'example.com'"));
+            assert!(body.contains("alpn:\n      - h3"));
             assert!(body.contains("obfs: 'salamander'"));
+            assert!(!body.contains("tls: true"));
         }
         assert!(
             service
