@@ -2,6 +2,8 @@ use std::{
     collections::VecDeque,
     env,
     fmt::Write as _,
+    fs,
+    path::PathBuf,
     time::{Duration, Instant},
 };
 
@@ -10,7 +12,9 @@ use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD},
 };
+use blake2::{Blake2s256, Digest};
 use percent_encoding::percent_decode_str;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use url::Url;
@@ -74,18 +78,41 @@ struct ShortEntry {
     expires_at: Instant,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct PersistentShortLink {
+    code: String,
+    query: String,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct PersistentShortLinks {
+    links: Vec<PersistentShortLink>,
+}
+
 #[derive(Debug)]
 struct ShortStore {
     entries: VecDeque<ShortEntry>,
+    permanent: Vec<PersistentShortLink>,
+    persistence_path: Option<PathBuf>,
     limit: usize,
     ttl: Duration,
     disabled: bool,
 }
 
 impl ShortStore {
-    fn from_env() -> Self {
-        Self {
+    fn from_env(persistence_path: Option<PathBuf>) -> Result<Self> {
+        let permanent = match persistence_path.as_ref() {
+            Some(path) => match fs::read_to_string(path) {
+                Ok(contents) => toml::from_str::<PersistentShortLinks>(&contents)?.links,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(error) => return Err(error.into()),
+            },
+            None => Vec::new(),
+        };
+        Ok(Self {
             entries: VecDeque::new(),
+            permanent,
+            persistence_path,
             limit: positive_env("MAX_SHORT_LINKS", DEFAULT_SHORT_LINKS),
             ttl: Duration::from_secs(positive_env(
                 "SHORT_LINK_TTL_SECONDS",
@@ -93,7 +120,7 @@ impl ShortStore {
             ) as u64),
             disabled: env::var("DISABLE_MEMORY_KV")
                 .is_ok_and(|value| value.eq_ignore_ascii_case("true")),
-        }
+        })
     }
 
     fn prune(&mut self) {
@@ -118,12 +145,49 @@ impl ShortStore {
         Ok(())
     }
 
+    fn put_permanent(&mut self, code: String, query: String) -> Result<()> {
+        ensure!(!self.disabled, "memory short-link storage is disabled");
+        if let Some(entry) = self.permanent.iter_mut().find(|entry| entry.code == code) {
+            entry.query = query;
+        } else {
+            self.permanent.push(PersistentShortLink { code, query });
+        }
+        self.persist()
+    }
+
+    fn persist(&self) -> Result<()> {
+        let Some(path) = self.persistence_path.as_ref() else {
+            return Ok(());
+        };
+        let contents = toml::to_string(&PersistentShortLinks {
+            links: self.permanent.clone(),
+        })?;
+        let mut options = fs::OpenOptions::new();
+        options.create(true).write(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        use std::io::Write as _;
+        let mut file = options.open(path)?;
+        file.write_all(contents.as_bytes())?;
+        file.sync_data()?;
+        Ok(())
+    }
+
     fn get(&mut self, code: &str) -> Option<String> {
         self.prune();
-        self.entries
+        self.permanent
             .iter()
             .find(|entry| entry.code == code)
             .map(|entry| entry.query.clone())
+            .or_else(|| {
+                self.entries
+                    .iter()
+                    .find(|entry| entry.code == code)
+                    .map(|entry| entry.query.clone())
+            })
     }
 }
 
@@ -134,12 +198,18 @@ pub struct SublinkService {
 impl Default for SublinkService {
     fn default() -> Self {
         Self {
-            store: Mutex::new(ShortStore::from_env()),
+            store: Mutex::new(ShortStore::from_env(None).expect("initialize short-link store")),
         }
     }
 }
 
 impl SublinkService {
+    pub fn with_persistence(path: PathBuf) -> Result<Self> {
+        Ok(Self {
+            store: Mutex::new(ShortStore::from_env(Some(path))?),
+        })
+    }
+
     pub fn convert(&self, format: &str, input: &str) -> Result<SublinkOutput> {
         let nodes = parse_input(input)?;
         match format {
@@ -193,6 +263,26 @@ impl SublinkService {
             .lock()
             .await
             .put(code.clone(), format!("?{query}"))?;
+        Ok(code)
+    }
+
+    pub async fn shorten_hy2(&self, raw_url: &str) -> Result<String> {
+        let url = Url::parse(raw_url).map_err(|_| anyhow!("invalid URL parameter"))?;
+        ensure!(url.path() == "/xray", "invalid HY2 URL parameter");
+        let config = query_value(&url, &["config"]);
+        ensure!(
+            config.starts_with("hysteria2://"),
+            "invalid HY2 URL parameter"
+        );
+        ensure!(
+            config.len() <= MAX_INPUT_BYTES,
+            "URL parameter is too large"
+        );
+        let code = stable_code(config.as_bytes());
+        self.store.lock().await.put_permanent(
+            code.clone(),
+            format!("?{}", url.query().unwrap_or_default()),
+        )?;
         Ok(code)
     }
 
@@ -732,6 +822,16 @@ fn random_code() -> Result<String> {
         .collect())
 }
 
+fn stable_code(value: &[u8]) -> String {
+    let digest = Blake2s256::digest(value);
+    digest[..10]
+        .iter()
+        .fold(String::with_capacity(20), |mut code, byte| {
+            let _ = write!(code, "{byte:02x}");
+            code
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -818,5 +918,23 @@ mod tests {
             .await
             .unwrap();
         assert!(resolved.contains("https://example.com/singbox?"));
+    }
+
+    #[tokio::test]
+    async fn permanent_hy2_short_links_survive_service_reload() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("hy2-short-links.toml");
+        let config = "hysteria2://password@example.com:443/?insecure=1#user";
+        let raw = format!(
+            "https://example.com/xray?config={}",
+            url::form_urlencoded::byte_serialize(config.as_bytes()).collect::<String>()
+        );
+        let expected = raw.strip_prefix("https://example.com").unwrap();
+        let first = SublinkService::with_persistence(path.clone()).unwrap();
+        let code = first.shorten_hy2(&raw).await.unwrap();
+        assert_eq!(first.redirect("x", &code).await.unwrap(), expected);
+
+        let second = SublinkService::with_persistence(path).unwrap();
+        assert_eq!(second.redirect("x", &code).await.unwrap(), expected);
     }
 }

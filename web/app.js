@@ -128,7 +128,11 @@ function formatUptime(seconds) {
 }
 
 function displayListenAddress(value) {
-  return String(value || "").replace(/^\[::\](?=:|$)/, "0.0.0.0");
+  const address = String(value || "");
+  const port = address.match(/^\[::\]:(\d+)$/);
+  if (port) return `0.0.0.0:${port[1]} / [::]:${port[1]}`;
+  if (address === "[::]") return "0.0.0.0 / [::]";
+  return address;
 }
 
 async function loadStatus() {
@@ -391,7 +395,7 @@ async function generateShareShortLinks() {
     try {
       const longUrl = new URL("/xray", window.location.origin);
       longUrl.searchParams.set("config", item.link);
-      const shorten = new URL("/shorten-v2", window.location.origin);
+      const shorten = new URL("/shorten-hy2", window.location.origin);
       shorten.searchParams.set("url", longUrl.toString());
       const response = await fetch(shorten);
       if (!response.ok) throw new Error(await response.text() || "短链接生成失败");

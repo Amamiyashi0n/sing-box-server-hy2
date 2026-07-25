@@ -132,7 +132,9 @@ pub async fn run(
         write_lock: Arc::new(Mutex::new(())),
         credentials_lock: Arc::new(Mutex::new(())),
         commands,
-        sublink: Arc::new(SublinkService::default()),
+        sublink: Arc::new(SublinkService::with_persistence(
+            config_path.with_file_name("hy2-short-links.toml"),
+        )?),
     };
     let listener = tokio::net::TcpListener::bind(listen)
         .await
@@ -255,6 +257,7 @@ fn router(state: AdminState) -> Router {
         .route("/surge", get(sublink_surge))
         .route("/xray", get(sublink_xray))
         .route("/shorten-v2", get(sublink_shorten))
+        .route("/shorten-hy2", get(sublink_shorten_hy2))
         .route("/resolve", get(sublink_resolve))
         .route("/subconverter", get(sublink_subconverter))
         .route("/{prefix}/{code}", get(sublink_redirect))
@@ -526,6 +529,19 @@ async fn sublink_shorten(
     };
     let requested = uri_parameter(&uri, "shortCode");
     match state.sublink.shorten(&url, requested.as_deref()).await {
+        Ok(code) => ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], code).into_response(),
+        Err(error) => sublink_error(sublink_status(&error), error),
+    }
+}
+
+async fn sublink_shorten_hy2(
+    State(state): State<AdminState>,
+    OriginalUri(uri): OriginalUri,
+) -> Response {
+    let Some(url) = uri_parameter(&uri, "url") else {
+        return sublink_error(StatusCode::BAD_REQUEST, "missing URL parameter");
+    };
+    match state.sublink.shorten_hy2(&url).await {
         Ok(code) => ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], code).into_response(),
         Err(error) => sublink_error(sublink_status(&error), error),
     }
