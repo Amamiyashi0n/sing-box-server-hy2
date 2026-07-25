@@ -19,6 +19,14 @@ const state = {
 const CONVERTER_FORMATS = ["singbox", "clash", "surge", "xray"];
 const CONVERTER_LABELS = { singbox: "Sing-Box", clash: "Clash", surge: "Surge", xray: "Xray" };
 const CONVERTER_PREFIXES = { singbox: "b", clash: "c", surge: "s", xray: "x" };
+const PAGE_TITLES = {
+  overview: "概览",
+  service: "服务配置",
+  users: "用户与链接",
+  admin: "管理账户",
+  converter: "订阅转换"
+};
+const PAGE_ALIASES = { overview: "overview", network: "service", transport: "service", masquerade: "service", service: "service", users: "users", links: "users", admin: "admin", "admin-users": "admin", converter: "converter" };
 
 function basicAuthorization(username, password) {
   const bytes = new TextEncoder().encode(`${username}:${password}`);
@@ -81,6 +89,23 @@ function stopStatusPolling() {
   if (state.timer === null) return;
   clearInterval(state.timer);
   state.timer = null;
+}
+
+function pageFromHash() {
+  return PAGE_ALIASES[window.location.hash.slice(1)] || "overview";
+}
+
+function activatePage(page, updateHash = true) {
+  const activePage = PAGE_TITLES[page] ? page : "overview";
+  document.querySelectorAll(".page-panel").forEach(panel => {
+    panel.classList.toggle("active", panel.dataset.page === activePage);
+  });
+  document.querySelectorAll("nav a[data-page]").forEach(link => {
+    link.classList.toggle("active", link.dataset.page === activePage);
+  });
+  $("#page-title").textContent = PAGE_TITLES[activePage];
+  $("#save").classList.toggle("hidden", !["service", "users"].includes(activePage));
+  if (updateHash && window.location.hash !== `#${activePage}`) history.replaceState(null, "", `#${activePage}`);
 }
 
 function toast(message, error = false) {
@@ -532,7 +557,12 @@ function collectConfig() {
 
 async function saveConfig(event) {
   event?.preventDefault();
-  if (!$("#config-form").reportValidity()) return;
+  const visibleFields = [...$("#config-form").elements].filter(field => field.getClientRects().length > 0);
+  const invalidField = visibleFields.find(field => !field.checkValidity());
+  if (invalidField) {
+    invalidField.reportValidity();
+    return;
+  }
   const button = $("#save");
   button.disabled = true;
   try {
@@ -643,15 +673,17 @@ function bindEvents() {
       }
     }
   });
-  document.querySelectorAll("nav a").forEach(link => link.addEventListener("click", () => {
-    document.querySelectorAll("nav a").forEach(item => item.classList.remove("active"));
-    link.classList.add("active");
+  document.querySelectorAll("nav a[data-page]").forEach(link => link.addEventListener("click", event => {
+    event.preventDefault();
+    activatePage(link.dataset.page);
   }));
+  window.addEventListener("hashchange", () => activatePage(pageFromHash(), false));
 }
 
 async function initialize() {
   bindEvents();
   renderConverter();
+  activatePage(pageFromHash(), false);
 }
 
 initialize();

@@ -40,6 +40,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .brand strong, .brand span { display: block; }
 .brand strong { font-size: 14px; font-weight: 600; white-space: nowrap; }
 .brand span { margin-top: 4px; color: var(--subtle); font-size: 11px; }
+.nav-group { display: grid; gap: 2px; }
+.nav-group + .nav-group { margin-top: 18px; }
+.nav-group-label { padding: 0 11px 6px; color: var(--subtle); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
 nav { display: grid; gap: 2px; scrollbar-width: none; }
 nav::-webkit-scrollbar { display: none; }
 nav a { min-height: 38px; display: flex; align-items: center; padding: 0 11px; border-radius: 7px; color: var(--muted); text-decoration: none; font-size: 13px; }
@@ -72,6 +75,8 @@ h2 { font-size: 16px; font-weight: 600; }
 .service-state.offline i { background: var(--red); }
 
 .overview, .config-section { padding: 30px 0; border-bottom: 1px solid var(--line-soft); scroll-margin-top: 72px; }
+.page-panel { display: none; }
+.page-panel.active { display: block; }
 .section-heading { min-height: 32px; display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
 .section-heading > span { color: var(--subtle); font-size: 12px; }
 .heading-actions { display: flex; align-items: center; gap: 14px; }
@@ -160,6 +165,8 @@ dialog::backdrop { background: rgba(0, 0, 0, .7); }
   .sidebar { position: static; width: 100%; height: auto; padding: 12px 18px 0; border-bottom: 1px solid var(--line-soft); }
   .brand { padding: 2px 4px 12px; }
   nav { display: flex; overflow-x: auto; gap: 2px; }
+  .nav-group { display: contents; }
+  .nav-group-label { display: none; }
   nav a { flex: 0 0 auto; min-height: 36px; padding: 0 11px; }
   .sidebar-foot { display: none; }
   .workspace { max-width: 820px; padding: 0 24px 52px; }
