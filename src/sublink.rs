@@ -850,7 +850,12 @@ fn format_for_prefix(prefix: &str) -> Option<&'static str> {
 fn auto_format(user_agent: &str, accept: &str) -> &'static str {
     let user_agent = user_agent.to_ascii_lowercase();
     let accept = accept.to_ascii_lowercase();
-    if user_agent.contains("clash") || user_agent.contains("mihomo") || accept.contains("yaml") {
+    if user_agent.contains("clash-meta")
+        || user_agent.contains("clash verge")
+        || user_agent.contains("clash")
+        || user_agent.contains("mihomo")
+        || accept.contains("yaml")
+    {
         "clash"
     } else if user_agent.contains("surge") {
         "surge"
@@ -1018,14 +1023,16 @@ mod tests {
             url::form_urlencoded::byte_serialize(config.as_bytes()).collect::<String>()
         );
         let code = service.shorten_hy2(&raw).await.unwrap();
-        assert!(
-            service
-                .auto(&code, "Clash Meta", "")
-                .await
-                .unwrap()
-                .body
-                .contains("proxies:")
-        );
+        for user_agent in ["Clash Meta", "Clash Verge Rev"] {
+            assert!(
+                service
+                    .auto(&code, user_agent, "")
+                    .await
+                    .unwrap()
+                    .body
+                    .contains("proxies:")
+            );
+        }
         assert!(
             service
                 .auto(&code, "sing-box", "")
