@@ -127,6 +127,10 @@ function formatUptime(seconds) {
   return `${seconds}秒`;
 }
 
+function displayListenAddress(value) {
+  return String(value || "").replace(/^\[::\](?=:|$)/, "0.0.0.0");
+}
+
 async function loadStatus() {
   try {
     const status = await api("/api/v1/status");
@@ -134,7 +138,7 @@ async function loadStatus() {
     const service = $("#service-state");
     service.className = `service-state ${status.running ? "online" : "offline"}`;
     service.lastElementChild.textContent = status.running ? "运行中" : "已停止";
-    $("#metric-listen").textContent = status.listen || "--";
+    $("#metric-listen").textContent = displayListenAddress(status.listen) || "--";
     $("#metric-users").textContent = String(status.users);
     $("#metric-bandwidth").textContent = `${status.up_mbps} / ${status.down_mbps} Mbps`;
     $("#metric-uptime").textContent = formatUptime(status.uptime_secs);
