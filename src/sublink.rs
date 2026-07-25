@@ -269,7 +269,11 @@ impl SublinkService {
     pub async fn shorten_hy2(&self, raw_url: &str) -> Result<String> {
         let url = Url::parse(raw_url).map_err(|_| anyhow!("invalid URL parameter"))?;
         ensure!(url.path() == "/xray", "invalid HY2 URL parameter");
-        let config = query_value(&url, &["config"]);
+        let mut config = query_value(&url, &["config"]);
+        if let Some(fragment) = url.fragment() {
+            config.push('#');
+            config.push_str(fragment);
+        }
         ensure!(
             config.starts_with("hysteria2://"),
             "invalid HY2 URL parameter"
@@ -279,10 +283,12 @@ impl SublinkService {
             "URL parameter is too large"
         );
         let code = stable_code(config.as_bytes());
-        self.store.lock().await.put_permanent(
-            code.clone(),
-            format!("?{}", url.query().unwrap_or_default()),
-        )?;
+        let encoded_config =
+            url::form_urlencoded::byte_serialize(config.as_bytes()).collect::<String>();
+        self.store
+            .lock()
+            .await
+            .put_permanent(code.clone(), format!("?config={encoded_config}"))?;
         Ok(code)
     }
 
