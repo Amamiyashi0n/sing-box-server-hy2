@@ -1075,6 +1075,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn clash_converter_and_adaptive_link_share_hy2_output() {
+        let service = SublinkService::default();
+        let config = "hysteria2://password@example.com:443/?sni=example.com&insecure=1&obfs=salamander&obfs-password=obfs-secret#user";
+        let raw = format!(
+            "https://example.com/xray?config={}",
+            url::form_urlencoded::byte_serialize(config.as_bytes()).collect::<String>()
+        );
+        let code = service.shorten_auto(&raw).await.unwrap();
+        let direct = service.convert("clash", config).unwrap();
+        let adaptive = service
+            .auto(&code, "ClashMetaForAndroid/2.11.28", "")
+            .await
+            .unwrap();
+
+        assert_eq!(adaptive.content_type, direct.content_type);
+        assert_eq!(adaptive.body, direct.body);
+    }
+
+    #[tokio::test]
     async fn automatic_converter_short_links_keep_full_proxy_query() {
         let service = SublinkService::default();
         let raw = format!(
