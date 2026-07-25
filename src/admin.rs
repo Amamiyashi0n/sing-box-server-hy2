@@ -53,6 +53,7 @@ struct AdminState {
     credentials_lock: Arc<Mutex<()>>,
     commands: mpsc::Sender<Command>,
     sublink: Arc<SublinkService>,
+    webui_listen: Arc<String>,
 }
 
 #[derive(Default)]
@@ -61,6 +62,7 @@ struct RuntimeState {
     generation: u64,
     started_at: Option<Instant>,
     listen: Option<String>,
+    service_address: Option<String>,
     users: usize,
     udp_enabled: bool,
     obfs: bool,
@@ -76,6 +78,8 @@ struct StatusResponse {
     generation: u64,
     uptime_secs: u64,
     listen: Option<String>,
+    service_address: Option<String>,
+    webui_listen: String,
     users: usize,
     udp_enabled: bool,
     obfs: bool,
@@ -135,6 +139,7 @@ pub async fn run(
         sublink: Arc::new(SublinkService::with_persistence(
             config_path.with_file_name("hy2-short-links.toml"),
         )?),
+        webui_listen: Arc::new(listen.to_string()),
     };
     let listener = tokio::net::TcpListener::bind(listen)
         .await
@@ -170,6 +175,13 @@ pub async fn run(
             runtime.generation = generation;
             runtime.started_at = Some(Instant::now());
             runtime.listen = Some(config.listen.to_string());
+            runtime.service_address = Some(
+                config
+                    .share
+                    .as_ref()
+                    .map(|share| format!("{}:{}", share.server, share.port))
+                    .unwrap_or_else(|| config.listen.to_string()),
+            );
             runtime.users = config.users.len();
             runtime.udp_enabled = config.udp.enabled;
             runtime.obfs = config.obfs.is_some();
@@ -322,6 +334,8 @@ async fn status(
             .started_at
             .map_or(0, |started| started.elapsed().as_secs()),
         listen: runtime.listen.clone(),
+        service_address: runtime.service_address.clone(),
+        webui_listen: state.webui_listen.as_ref().clone(),
         users: runtime.users,
         udp_enabled: runtime.udp_enabled,
         obfs: runtime.obfs,

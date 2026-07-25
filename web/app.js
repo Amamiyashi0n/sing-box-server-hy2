@@ -127,12 +127,14 @@ function formatUptime(seconds) {
   return `${seconds}秒`;
 }
 
-function displayListenAddress(value) {
+function listenAddressPair(value) {
   const address = String(value || "");
   const port = address.match(/^\[::\]:(\d+)$/);
-  if (port) return `0.0.0.0:${port[1]} / [::]:${port[1]}`;
-  if (address === "[::]") return "0.0.0.0 / [::]";
-  return address;
+  if (port) return { ipv4: `0.0.0.0:${port[1]}`, ipv6: address };
+  if (address === "[::]") return { ipv4: "0.0.0.0", ipv6: address };
+  const ipv4Port = address.match(/^0\.0\.0\.0:(\d+)$/);
+  if (ipv4Port) return { ipv4: address, ipv6: `[::]:${ipv4Port[1]}` };
+  return { ipv4: address || "--", ipv6: "--" };
 }
 
 async function loadStatus() {
@@ -142,7 +144,11 @@ async function loadStatus() {
     const service = $("#service-state");
     service.className = `service-state ${status.running ? "online" : "offline"}`;
     service.lastElementChild.textContent = status.running ? "运行中" : "已停止";
-    $("#metric-listen").textContent = displayListenAddress(status.listen) || "--";
+    const listen = listenAddressPair(status.listen);
+    $("#metric-ipv4-listen").textContent = listen.ipv4;
+    $("#metric-ipv6-listen").textContent = listen.ipv6;
+    $("#metric-service-listen").textContent = status.service_address || status.listen || "--";
+    $("#metric-webui-listen").textContent = status.webui_listen || "--";
     $("#metric-users").textContent = String(status.users);
     $("#metric-bandwidth").textContent = `${status.up_mbps} / ${status.down_mbps} Mbps`;
     $("#metric-uptime").textContent = formatUptime(status.uptime_secs);
