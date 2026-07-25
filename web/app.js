@@ -8,6 +8,8 @@ const state = {
   shareShortLinks: new Map(),
   shareShortLinkErrors: new Map(),
   shareShortLinksPending: new Set(),
+  shareRulePreset: "balanced",
+  shareAdBlock: false,
   converter: {
     source: localStorage.getItem("sublink-source") || "",
     rulePreset: localStorage.getItem("sublink-rule-preset") || "balanced",
@@ -194,6 +196,8 @@ async function loadConfig() {
   $("#share-port").value = config.share?.port ?? listenPort(config.listen) ?? 443;
   $("#share-sni").value = config.share?.sni || "";
   $("#share-insecure").checked = Boolean(config.share?.insecure);
+  state.shareRulePreset = config.share?.rule_preset || "balanced";
+  state.shareAdBlock = Boolean(config.share?.ad_block);
   $("#up-mbps").value = config.bandwidth?.up_mbps ?? 0;
   $("#down-mbps").value = config.bandwidth?.down_mbps ?? 0;
   $("#ignore-bandwidth").checked = Boolean(config.bandwidth?.ignore_client_bandwidth);
@@ -206,6 +210,7 @@ async function loadConfig() {
   const type = config.masquerade?.type || "none";
   $("#masquerade-type").value = type;
   renderMasquerade(type, config.masquerade);
+  renderShareRuleOptions();
   await generateShareShortLinks();
 }
 
@@ -369,6 +374,12 @@ function currentShareLinks() {
   }))).filter(item => item.link);
 }
 
+function renderShareRuleOptions() {
+  $("#share-rule-preset").value = state.shareRulePreset;
+  $("#share-adblock").checked = state.shareAdBlock || state.shareRulePreset === "comprehensive";
+  $("#share-adblock").disabled = state.shareRulePreset === "comprehensive";
+}
+
 function renderShareLinks() {
   const target = $("#share-links");
   if (!target) return;
@@ -427,6 +438,10 @@ async function generateShareShortLinks() {
     try {
       const longUrl = new URL("/xray", window.location.origin);
       longUrl.searchParams.set("config", item.link);
+      longUrl.searchParams.set("selectedRules", state.shareRulePreset);
+      if (state.shareAdBlock && state.shareRulePreset !== "comprehensive") {
+        longUrl.searchParams.set("adblock", "true");
+      }
       const shorten = new URL("/shorten-hy2", window.location.origin);
       shorten.searchParams.set("url", longUrl.toString());
       const response = await fetch(shorten);
@@ -587,7 +602,9 @@ function collectConfig() {
       ipv6_server: shareIpv6Server,
       port: Number($("#share-port").value),
       sni: $("#share-sni").value.trim(),
-      insecure: $("#share-insecure").checked
+      insecure: $("#share-insecure").checked,
+      rule_preset: state.shareRulePreset,
+      ad_block: state.shareAdBlock
     } : null
   };
 }
@@ -606,6 +623,8 @@ async function saveConfig(event) {
     const payload = collectConfig();
     await api("/api/v1/config", { method: "PUT", body: JSON.stringify(payload) });
     state.config = payload;
+    state.shareShortLinks.clear();
+    state.shareShortLinkErrors.clear();
     await generateShareShortLinks();
     toast("配置已保存，HY2 服务正在重新加载");
     setTimeout(loadStatus, 450);
@@ -632,6 +651,14 @@ function bindEvents() {
   $("#obfs-enabled").addEventListener("change", toggleObfs);
   $("#show-passwords").addEventListener("change", applyPasswordVisibility);
   $("#config-form").addEventListener("input", renderShareLinks);
+  $("#share-rule-preset").addEventListener("change", event => {
+    state.shareRulePreset = event.target.value;
+    renderShareRuleOptions();
+  });
+  $("#share-adblock").addEventListener("change", event => {
+    state.shareAdBlock = event.target.checked;
+    renderShareRuleOptions();
+  });
   $("#masquerade-type").addEventListener("change", event => renderMasquerade(event.target.value));
   $("#converter-source").addEventListener("input", event => {
     state.converter.source = event.target.value;

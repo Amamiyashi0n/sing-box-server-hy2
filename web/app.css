@@ -116,6 +116,7 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.5; }
 .user-row { display: grid; grid-template-columns: minmax(150px, .75fr) minmax(240px, 1.4fr) auto; gap: 10px; align-items: end; padding: 12px; border-radius: 8px; background: var(--surface); }
 .user-index { color: var(--subtle); font-size: 10px; margin-bottom: 7px; }
 .empty { padding: 18px 0; color: var(--subtle); font-size: 12px; }
+.subscription-options { margin-bottom: 16px; }
 .share-links { display: grid; gap: 8px; }
 .share-link-card { min-width: 0; padding: 14px; border-radius: 8px; background: var(--surface); }
 .share-link-user { min-width: 0; padding-bottom: 11px; border-bottom: 1px solid var(--line); }

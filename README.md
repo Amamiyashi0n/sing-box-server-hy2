@@ -103,6 +103,8 @@ server = "hy2.example.com"
 port = 443
 sni = "hy2.example.com"
 insecure = false
+rule_preset = "balanced" # minimal, balanced, or comprehensive
+ad_block = false
 ```
 
 The generated URI includes authentication, TLS, and Salamander parameters, but

@@ -72,6 +72,10 @@ pub struct ShareConfig {
     pub sni: String,
     #[serde(default)]
     pub insecure: bool,
+    #[serde(default = "default_share_rule_preset")]
+    pub rule_preset: String,
+    #[serde(default)]
+    pub ad_block: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -105,6 +109,10 @@ const fn default_udp_timeout_secs() -> u64 {
 
 const fn default_masquerade_status() -> u16 {
     200
+}
+
+fn default_share_rule_preset() -> String {
+    "balanced".to_owned()
 }
 
 impl Default for UdpConfig {
@@ -221,6 +229,13 @@ impl Config {
                 share.port > 0,
                 "share server port must be greater than zero"
             );
+            ensure!(
+                matches!(
+                    share.rule_preset.as_str(),
+                    "minimal" | "balanced" | "comprehensive"
+                ),
+                "share rule preset must be minimal, balanced, or comprehensive"
+            );
         }
         Ok(())
     }
@@ -236,6 +251,11 @@ mod tests {
 
     #[test]
     fn share_config_accepts_legacy_ipv4_only_files() {
+        assert_eq!(
+            base_config().share.unwrap().rule_preset,
+            "balanced",
+            "legacy share configs should receive the upstream default preset"
+        );
         let mut config = base_config();
         config.share = Some(ShareConfig {
             server: "198.51.100.10".to_owned(),
@@ -243,6 +263,8 @@ mod tests {
             port: 443,
             sni: "example.com".to_owned(),
             insecure: false,
+            rule_preset: "balanced".to_owned(),
+            ad_block: false,
         });
         let encoded = config.to_toml().unwrap();
         assert!(encoded.contains("server = \"198.51.100.10\""));
@@ -266,6 +288,8 @@ mod tests {
             port: 443,
             sni: "example.com".to_owned(),
             insecure: false,
+            rule_preset: "balanced".to_owned(),
+            ad_block: false,
         });
         assert!(config.validate().is_ok());
         assert!(config.to_toml().unwrap().contains("2001:db8::10"));

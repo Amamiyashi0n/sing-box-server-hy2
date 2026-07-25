@@ -430,14 +430,7 @@ impl SublinkService {
     pub async fn shorten_hy2(&self, raw_url: &str) -> Result<String> {
         let url = Url::parse(raw_url).map_err(|_| anyhow!("invalid URL parameter"))?;
         ensure!(url.path() == "/xray", "invalid HY2 URL parameter");
-        let raw_config = raw_url
-            .split_once("?config=")
-            .map(|(_, value)| value)
-            .ok_or_else(|| anyhow!("invalid HY2 URL parameter"))?;
-        let config = percent_decode_str(raw_config)
-            .decode_utf8()
-            .map_err(|_| anyhow!("invalid HY2 URL parameter"))?
-            .into_owned();
+        let config = query_value(&url, &["config"]);
         ensure!(
             config.starts_with("hysteria2://"),
             "invalid HY2 URL parameter"
@@ -447,12 +440,26 @@ impl SublinkService {
             "URL parameter is too large"
         );
         let code = stable_code(config.as_bytes());
-        let encoded_config =
-            url::form_urlencoded::byte_serialize(config.as_bytes()).collect::<String>();
+        let selected_rules = query_value_optional(&url, &["selectedRules"]);
+        if let Some(selected_rules) = selected_rules.as_deref() {
+            parse_rule_preset(selected_rules)?;
+        }
+        let ad_block = query_bool(&url, &["adblock"]);
+        let query = {
+            let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+            serializer.append_pair("config", &config);
+            if let Some(selected_rules) = selected_rules {
+                serializer.append_pair("selectedRules", &selected_rules);
+            }
+            if ad_block {
+                serializer.append_pair("adblock", "true");
+            }
+            serializer.finish()
+        };
         self.store
             .lock()
             .await
-            .put_permanent(code.clone(), format!("?config={encoded_config}"))?;
+            .put_permanent(code.clone(), format!("?{query}"))?;
         Ok(code)
     }
 
@@ -1337,6 +1344,36 @@ mod tests {
 
         let second = SublinkService::with_persistence(path).unwrap();
         assert_eq!(second.redirect("x", &code).await.unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn permanent_hy2_links_retain_and_update_rule_selection() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("hy2-rule-links.toml");
+        let config = "hysteria2://password@example.com:443/?sni=example.com&insecure=1&obfs=salamander&obfs-password=obfs-secret#user";
+        let encoded = url::form_urlencoded::byte_serialize(config.as_bytes()).collect::<String>();
+        let minimal =
+            format!("https://example.com/xray?config={encoded}&selectedRules=minimal&adblock=true");
+        let first = SublinkService::with_persistence(path.clone()).unwrap();
+        let code = first.shorten_hy2(&minimal).await.unwrap();
+        let clash = first
+            .auto(&code, "clash-verge/v2.4", "")
+            .await
+            .unwrap()
+            .body;
+        assert!(clash.contains("category-ads-all.mrs"));
+        assert!(clash.contains("geolocation-!cn.mrs"));
+        assert!(!clash.contains("youtube.mrs"));
+
+        let comprehensive =
+            format!("https://example.com/xray?config={encoded}&selectedRules=comprehensive");
+        assert_eq!(first.shorten_hy2(&comprehensive).await.unwrap(), code);
+        drop(first);
+
+        let second = SublinkService::with_persistence(path).unwrap();
+        let singbox = second.auto(&code, "sing-box/1.14", "").await.unwrap().body;
+        assert!(singbox.contains("category-ads-all.srs"));
+        assert!(singbox.contains("youtube.srs"));
     }
 
     #[tokio::test]
