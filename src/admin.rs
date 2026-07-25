@@ -4,7 +4,7 @@ use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::Arc,
-    time::Instant,
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, bail};
@@ -15,7 +15,14 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
+use blake2::{
+    Blake2b512, Blake2bMac512, Digest,
+    digest::{KeyInit, Mac},
+};
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
@@ -24,6 +31,8 @@ use tracing::{info, warn};
 use crate::{config::Config, server, sublink::SublinkService};
 
 pub const DEFAULT_ADMIN_USERNAME: &str = "admin";
+const ADMIN_SESSION_COOKIE: &str = "sing_box_ser_mini_session";
+const ADMIN_SESSION_TTL_SECS: u64 = 24 * 60 * 60;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AdminCredentials {
@@ -113,6 +122,24 @@ struct AddAdminUserRequest {
 #[derive(Deserialize)]
 struct ChangeAdminPasswordRequest {
     password: String,
+}
+
+#[derive(Deserialize)]
+struct LoginRequest {
+    username: String,
+    password: String,
+}
+
+#[derive(Serialize)]
+struct LoginResponse {
+    username: String,
+    expires_at: u64,
+}
+
+#[derive(Deserialize, Serialize)]
+struct SessionClaims {
+    username: String,
+    expires_at: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -259,6 +286,8 @@ fn router(state: AdminState) -> Router {
         .route("/app.css", get(styles))
         .route("/app.js", get(script))
         .route("/api/v1/health", get(health))
+        .route("/api/v1/login", post(login))
+        .route("/api/v1/logout", post(logout))
         .route("/api/v1/status", get(status))
         .route("/api/v1/config", get(get_config).put(put_config))
         .route("/api/v1/reload", post(reload))
@@ -326,6 +355,56 @@ async fn script() -> impl IntoResponse {
 
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
+}
+
+async fn login(
+    State(state): State<AdminState>,
+    Json(request): Json<LoginRequest>,
+) -> ApiResult<(HeaderMap, Json<LoginResponse>)> {
+    let credentials = load_credentials(&state.credentials_path).map_err(ApiError::internal)?;
+    let Some(user) = credentials.users.iter().find(|user| {
+        bool::from(request.username.as_bytes().ct_eq(user.username.as_bytes()))
+            & bool::from(request.password.as_bytes().ct_eq(user.password.as_bytes()))
+    }) else {
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "invalid username or password",
+        ));
+    };
+    let expires_at = unix_time().saturating_add(ADMIN_SESSION_TTL_SECS);
+    let token = issue_session_token(user, expires_at).map_err(ApiError::internal)?;
+    let cookie = format!(
+        "{ADMIN_SESSION_COOKIE}={token}; Max-Age={ADMIN_SESSION_TTL_SECS}; Path=/; HttpOnly; SameSite=Strict"
+    );
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::SET_COOKIE,
+        cookie.parse().map_err(ApiError::internal)?,
+    );
+    Ok((
+        headers,
+        Json(LoginResponse {
+            username: user.username.clone(),
+            expires_at,
+        }),
+    ))
+}
+
+async fn logout() -> (HeaderMap, Json<MutationResponse>) {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::SET_COOKIE,
+        format!("{ADMIN_SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict")
+            .parse()
+            .expect("static logout cookie is valid"),
+    );
+    (
+        headers,
+        Json(MutationResponse {
+            accepted: true,
+            message: "logged out",
+        }),
+    )
 }
 
 async fn status(
@@ -693,11 +772,16 @@ async fn authorize(state: &AdminState, headers: &HeaderMap) -> ApiResult<()> {
     if valid_token {
         return Ok(());
     }
+    let contents = tokio::fs::read_to_string(state.credentials_path.as_ref())
+        .await
+        .map_err(ApiError::internal)?;
+    let credentials = parse_credentials(&contents).map_err(ApiError::internal)?;
+    if session_cookie(headers)
+        .is_some_and(|token| validate_session_token(token, &credentials, unix_time()).is_some())
+    {
+        return Ok(());
+    }
     if let Some((username, password)) = decode_basic_credentials(authorization) {
-        let contents = tokio::fs::read_to_string(state.credentials_path.as_ref())
-            .await
-            .map_err(ApiError::internal)?;
-        let credentials = parse_credentials(&contents).map_err(ApiError::internal)?;
         if credentials.users.iter().any(|user| {
             bool::from(username.as_slice().ct_eq(user.username.as_bytes()))
                 & bool::from(password.as_slice().ct_eq(user.password.as_bytes()))
@@ -709,6 +793,68 @@ async fn authorize(state: &AdminState, headers: &HeaderMap) -> ApiResult<()> {
         StatusCode::UNAUTHORIZED,
         "invalid username or password",
     ))
+}
+
+fn issue_session_token(user: &AdminCredentials, expires_at: u64) -> Result<String> {
+    let claims = serde_json::to_vec(&SessionClaims {
+        username: user.username.clone(),
+        expires_at,
+    })
+    .context("serialize admin session")?;
+    let signature = session_signature(&user.password, &claims)?;
+    Ok(format!(
+        "{}.{}",
+        URL_SAFE_NO_PAD.encode(claims),
+        URL_SAFE_NO_PAD.encode(signature)
+    ))
+}
+
+fn validate_session_token(
+    token: &str,
+    credentials: &AdminCredentialsFile,
+    now: u64,
+) -> Option<String> {
+    let (claims, signature) = token.split_once('.')?;
+    let claims = URL_SAFE_NO_PAD.decode(claims).ok()?;
+    let signature = URL_SAFE_NO_PAD.decode(signature).ok()?;
+    let claims_document: SessionClaims = serde_json::from_slice(&claims).ok()?;
+    if claims_document.expires_at <= now {
+        return None;
+    }
+    let user = credentials
+        .users
+        .iter()
+        .find(|user| user.username == claims_document.username)?;
+    let expected = session_signature(&user.password, &claims).ok()?;
+    if !bool::from(signature.as_slice().ct_eq(expected.as_slice())) {
+        return None;
+    }
+    Some(claims_document.username)
+}
+
+fn session_signature(password: &str, claims: &[u8]) -> Result<Vec<u8>> {
+    let key = Blake2b512::digest(password.as_bytes());
+    let mut mac = <Blake2bMac512 as KeyInit>::new_from_slice(key.as_slice())
+        .map_err(|_| anyhow::anyhow!("initialize admin session signer"))?;
+    Mac::update(&mut mac, claims);
+    Ok(mac.finalize().into_bytes().to_vec())
+}
+
+fn session_cookie(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(';'))
+        .filter_map(|part| part.trim().split_once('='))
+        .find_map(|(name, value)| (name == ADMIN_SESSION_COOKIE).then_some(value))
+}
+
+fn unix_time() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn decode_basic_credentials(authorization: &str) -> Option<(Vec<u8>, Vec<u8>)> {
@@ -945,5 +1091,38 @@ mod tests {
         let (username, password) = decode_basic_credentials("Basic YWRtaW46cGFzc3dvcmQ=").unwrap();
         assert_eq!(username, b"admin");
         assert_eq!(password, b"password");
+    }
+
+    #[test]
+    fn signs_and_expires_admin_sessions() {
+        let user = AdminCredentials {
+            username: "operator".to_owned(),
+            password: "secret".to_owned(),
+        };
+        let credentials = AdminCredentialsFile {
+            users: vec![user.clone()],
+        };
+        let token = issue_session_token(&user, 86_500).unwrap();
+        assert_eq!(
+            validate_session_token(&token, &credentials, 100),
+            Some("operator".to_owned())
+        );
+        assert_eq!(validate_session_token(&token, &credentials, 86_500), None);
+
+        let changed = AdminCredentialsFile {
+            users: vec![AdminCredentials {
+                username: "operator".to_owned(),
+                password: "changed".to_owned(),
+            }],
+        };
+        assert_eq!(validate_session_token(&token, &changed, 100), None);
+
+        let mut tampered = token.into_bytes();
+        let last = tampered.len() - 1;
+        tampered[last] = if tampered[last] == b'A' { b'B' } else { b'A' };
+        assert_eq!(
+            validate_session_token(std::str::from_utf8(&tampered).unwrap(), &credentials, 100),
+            None
+        );
     }
 }

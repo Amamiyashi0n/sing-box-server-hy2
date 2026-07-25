@@ -1,8 +1,20 @@
 const $ = (selector, root = document) => root.querySelector(selector);
+const ADMIN_SESSION_STORAGE = "admin-session";
+const savedAdminSession = (() => {
+  try {
+    const session = JSON.parse(localStorage.getItem(ADMIN_SESSION_STORAGE) || "null");
+    if (session?.username && Number(session.expiresAt) * 1000 > Date.now()) return session;
+  } catch {
+    // Invalid or unavailable storage falls back to the login screen.
+  }
+  localStorage.removeItem(ADMIN_SESSION_STORAGE);
+  return null;
+})();
 const state = {
   config: null,
-  username: "",
+  username: savedAdminSession?.username || "",
   password: "",
+  sessionExpiresAt: Number(savedAdminSession?.expiresAt) || 0,
   timer: null,
   adminUsers: [],
   shareShortLinks: new Map(),
@@ -49,12 +61,37 @@ async function api(path, options = {}) {
   const payload = await response.json().catch(() => ({}));
   if (response.status === 401) {
     const message = state.password ? "用户名或密码错误" : "";
-    state.password = "";
+    clearAdminSession();
     openLoginScreen(message);
     throw new Error("需要登录");
   }
   if (!response.ok) throw new Error(payload.error || `请求失败 (${response.status})`);
   return payload;
+}
+
+function saveAdminSession(username, expiresAt) {
+  state.username = username;
+  state.password = "";
+  state.sessionExpiresAt = expiresAt;
+  localStorage.setItem(ADMIN_SESSION_STORAGE, JSON.stringify({ username, expiresAt }));
+}
+
+function clearAdminSession() {
+  state.username = "";
+  state.password = "";
+  state.sessionExpiresAt = 0;
+  localStorage.removeItem(ADMIN_SESSION_STORAGE);
+}
+
+async function createAdminSession(username, password) {
+  const response = await fetch("/api/v1/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password })
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || "用户名或密码错误");
+  saveAdminSession(payload.username, payload.expires_at);
 }
 
 function openLoginScreen(message = "") {
@@ -753,17 +790,19 @@ function bindEvents() {
       $("#admin-user-error").classList.remove("hidden");
     }
   });
-  $("#change-user").addEventListener("click", () => {
-    state.password = "";
+  $("#change-user").addEventListener("click", async () => {
+    await fetch("/api/v1/logout", { method: "POST" }).catch(() => {});
+    clearAdminSession();
     openLoginScreen();
   });
   $("#login-form").addEventListener("submit", async event => {
     event.preventDefault();
-    state.username = $("#login-username").value.trim();
-    state.password = $("#login-password").value;
+    const username = $("#login-username").value.trim();
+    const password = $("#login-password").value;
     $("#login-error").textContent = "";
     $("#login-error").classList.add("hidden");
     try {
+      await createAdminSession(username, password);
       await Promise.all([loadConfig(), loadAdminUsers()]);
       closeLoginScreen();
       await loadStatus();
@@ -786,6 +825,16 @@ async function initialize() {
   bindEvents();
   renderConverter();
   activatePage(pageFromHash(), false);
+  if (state.username && state.sessionExpiresAt * 1000 > Date.now()) {
+    try {
+      await Promise.all([loadConfig(), loadAdminUsers()]);
+      closeLoginScreen();
+      await loadStatus();
+      startStatusPolling();
+    } catch (error) {
+      if (!loginScreenVisible()) openLoginScreen(error.message);
+    }
+  }
 }
 
 initialize();
