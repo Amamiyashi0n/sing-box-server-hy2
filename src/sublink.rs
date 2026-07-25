@@ -4,7 +4,7 @@ use std::{
     fmt::Write as _,
     fs,
     path::PathBuf,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Result, anyhow, bail, ensure};
@@ -231,6 +231,8 @@ struct ShortEntry {
 struct PersistentShortLink {
     code: String,
     query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expires_at_unix: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -298,8 +300,55 @@ impl ShortStore {
         ensure!(!self.disabled, "memory short-link storage is disabled");
         if let Some(entry) = self.permanent.iter_mut().find(|entry| entry.code == code) {
             entry.query = query;
+            entry.expires_at_unix = None;
         } else {
-            self.permanent.push(PersistentShortLink { code, query });
+            self.permanent.push(PersistentShortLink {
+                code,
+                query,
+                expires_at_unix: None,
+            });
+        }
+        self.persist()
+    }
+
+    fn put_persisted_expiring(&mut self, code: String, query: String) -> Result<()> {
+        ensure!(!self.disabled, "memory short-link storage is disabled");
+        let now = unix_time();
+        self.permanent.retain(|entry| {
+            entry
+                .expires_at_unix
+                .is_none_or(|expires_at| expires_at > now)
+        });
+        let expires_at_unix = now.saturating_add(self.ttl.as_secs());
+        if let Some(entry) = self.permanent.iter_mut().find(|entry| entry.code == code) {
+            entry.query = query;
+            entry.expires_at_unix = Some(expires_at_unix);
+        } else {
+            while self
+                .permanent
+                .iter()
+                .filter(|entry| entry.expires_at_unix.is_some())
+                .count()
+                >= self.limit
+            {
+                let Some((index, _)) = self
+                    .permanent
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, entry)| {
+                        entry.expires_at_unix.map(|expiry| (index, expiry))
+                    })
+                    .min_by_key(|(_, expiry)| *expiry)
+                else {
+                    break;
+                };
+                self.permanent.remove(index);
+            }
+            self.permanent.push(PersistentShortLink {
+                code,
+                query,
+                expires_at_unix: Some(expires_at_unix),
+            });
         }
         self.persist()
     }
@@ -329,7 +378,12 @@ impl ShortStore {
         self.prune();
         self.permanent
             .iter()
-            .find(|entry| entry.code == code)
+            .find(|entry| {
+                entry.code == code
+                    && entry
+                        .expires_at_unix
+                        .is_none_or(|expires_at| expires_at > unix_time())
+            })
             .map(|entry| entry.query.clone())
             .or_else(|| {
                 self.entries
@@ -485,11 +539,11 @@ impl SublinkService {
             .filter(|query| !query.is_empty())
             .ok_or_else(|| anyhow!("invalid URL parameter"))?;
         ensure!(query.len() <= MAX_INPUT_BYTES, "URL parameter is too large");
-        let code = random_code()?;
+        let code = stable_code(query.as_bytes());
         self.store
             .lock()
             .await
-            .put(code.clone(), format!("?{query}"))?;
+            .put_persisted_expiring(code.clone(), format!("?{query}"))?;
         Ok(code)
     }
 
@@ -558,6 +612,13 @@ fn positive_env(name: &str, fallback: usize) -> usize {
         .and_then(|value| value.parse().ok())
         .filter(|value| *value > 0)
         .unwrap_or(fallback)
+}
+
+fn unix_time() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn decode_component(value: &str) -> String {
@@ -1485,5 +1546,28 @@ mod tests {
         let code = service.shorten_auto(&raw).await.unwrap();
         let output = service.auto(&code, "Clash Meta", "").await.unwrap();
         assert!(output.body.contains("edge.example.com"));
+    }
+
+    #[tokio::test]
+    async fn automatic_converter_links_survive_service_reload_until_expiry() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("converter-links.toml");
+        let raw = format!(
+            "https://example.com/xray?config={}&selectedRules=balanced&adblock=true",
+            url::form_urlencoded::byte_serialize(VLESS.as_bytes()).collect::<String>()
+        );
+        let first = SublinkService::with_persistence(path.clone()).unwrap();
+        let code = first.shorten_auto(&raw).await.unwrap();
+        drop(first);
+
+        let second = SublinkService::with_persistence(path.clone()).unwrap();
+        let output = second.auto(&code, "clash-verge/v2.5", "").await.unwrap();
+        assert!(output.body.contains("category-ads-all.mrs"));
+        assert!(output.body.contains("youtube.mrs"));
+        assert!(
+            fs::read_to_string(path)
+                .unwrap()
+                .contains("expires_at_unix")
+        );
     }
 }

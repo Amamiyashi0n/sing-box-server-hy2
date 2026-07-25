@@ -75,12 +75,14 @@ HY2 service reloads without restarting the management process.
 The WebUI includes a Rust-native subscription converter on the same management
 port. It accepts SS, VMess, VLESS, Trojan, Hysteria2, TUIC, AnyTLS, and Base64
 subscriptions, and emits Sing-Box, Clash, Surge, or Xray output. Generated
-short links use a bounded in-memory store with a default capacity of 512 and a
-24-hour TTL.
+converter links use a bounded persisted store with a default capacity of 512
+and a 24-hour TTL.
 
 The public client routes are `/singbox`, `/clash`, `/surge`, `/xray`,
-`/shorten-v2`, `/resolve`, and `/{b,c,s,x}/<code>`. Remote HTTP(S)
-subscription fetching is intentionally disabled.
+`/shorten-v2`, `/resolve`, and `/{b,c,s,x}/<code>`. Converter links are stored
+with their TTL so they survive process restarts while remaining bounded by the
+configured capacity. Remote HTTP(S) subscription fetching is intentionally
+disabled.
 
 The converter also implements the upstream Sublink Worker rule presets:
 `minimal`, `balanced`, and `comprehensive`, plus an independent ad-block
