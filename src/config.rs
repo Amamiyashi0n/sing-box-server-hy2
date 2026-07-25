@@ -232,9 +232,9 @@ impl Config {
             ensure!(
                 matches!(
                     share.rule_preset.as_str(),
-                    "minimal" | "balanced" | "comprehensive"
+                    "minimal" | "balanced" | "comprehensive" | "china"
                 ),
-                "share rule preset must be minimal, balanced, or comprehensive"
+                "share rule preset must be minimal, balanced, comprehensive, or china"
             );
         }
         Ok(())
@@ -293,5 +293,16 @@ mod tests {
         });
         assert!(config.validate().is_ok());
         assert!(config.to_toml().unwrap().contains("2001:db8::10"));
+    }
+
+    #[test]
+    fn share_config_accepts_china_rule_preset() {
+        let mut config = base_config();
+        let share = config.share.as_mut().unwrap();
+        share.rule_preset = "china".to_owned();
+        share.ad_block = true;
+        assert!(config.validate().is_ok());
+        let encoded = config.to_toml().unwrap();
+        assert!(encoded.contains("rule_preset = \"china\""));
     }
 }

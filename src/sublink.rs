@@ -37,6 +37,7 @@ enum RulePreset {
     Minimal,
     Balanced,
     Comprehensive,
+    China,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -162,6 +163,75 @@ const RULES: &[RuleSpec] = &[
         sites: &["aws", "azure", "digitalocean", "heroku", "dropbox"],
         ips: &[],
         action: RuleAction::Proxy,
+    },
+    RuleSpec {
+        name: "Non-China",
+        sites: &["geolocation-!cn"],
+        ips: &[],
+        action: RuleAction::Proxy,
+    },
+];
+
+const CHINA_RULES: &[RuleSpec] = &[
+    RuleSpec {
+        name: "Ad Block",
+        sites: &["category-ads-all"],
+        ips: &[],
+        action: RuleAction::Reject,
+    },
+    RuleSpec {
+        name: "Private",
+        sites: &["private"],
+        ips: &["private"],
+        action: RuleAction::Direct,
+    },
+    RuleSpec {
+        name: "China Services",
+        sites: &[
+            "apple-cn",
+            "microsoft@cn",
+            "steam@cn",
+            "category-games@cn",
+            "bilibili",
+        ],
+        ips: &[],
+        action: RuleAction::Direct,
+    },
+    RuleSpec {
+        name: "AI Services",
+        sites: &["category-ai-!cn"],
+        ips: &[],
+        action: RuleAction::Proxy,
+    },
+    RuleSpec {
+        name: "Youtube",
+        sites: &["youtube"],
+        ips: &[],
+        action: RuleAction::Proxy,
+    },
+    RuleSpec {
+        name: "Google",
+        sites: &["google"],
+        ips: &["google"],
+        action: RuleAction::Proxy,
+    },
+    RuleSpec {
+        name: "Telegram",
+        sites: &[],
+        ips: &["telegram"],
+        action: RuleAction::Proxy,
+    },
+    RuleSpec {
+        name: "Github",
+        sites: &["github", "gitlab"],
+        ips: &[],
+        action: RuleAction::Proxy,
+    },
+    RuleSpec {
+        name: "Location:CN",
+        sites: &["geolocation-cn", "cn"],
+        ips: &["cn"],
+        action: RuleAction::Direct,
     },
     RuleSpec {
         name: "Non-China",
@@ -438,18 +508,19 @@ impl SublinkService {
         let nodes = parse_input(input)?;
         let preset = selected_rules.map(parse_rule_preset).transpose()?;
         let rules = selected_rule_specs(preset, ad_block);
+        let china_optimized = preset == Some(RulePreset::China);
         match format {
             "singbox" => Ok(SublinkOutput::new(
                 "application/json; charset=utf-8",
-                render_singbox(&nodes, &rules)?,
+                render_singbox(&nodes, &rules, china_optimized)?,
             )),
             "clash" => Ok(SublinkOutput::new(
                 "text/yaml; charset=utf-8",
-                render_clash(&nodes, &rules, clash_mrs),
+                render_clash(&nodes, &rules, clash_mrs, china_optimized),
             )),
             "surge" => Ok(SublinkOutput::new(
                 "text/plain; charset=utf-8",
-                render_surge(&nodes, &rules),
+                render_surge(&nodes, &rules, china_optimized),
             )),
             "xray" => Ok(SublinkOutput::new(
                 "text/plain; charset=utf-8",
@@ -658,11 +729,18 @@ fn parse_rule_preset(value: &str) -> Result<RulePreset> {
         "minimal" => Ok(RulePreset::Minimal),
         "balanced" => Ok(RulePreset::Balanced),
         "comprehensive" => Ok(RulePreset::Comprehensive),
+        "china" => Ok(RulePreset::China),
         _ => bail!("invalid selectedRules preset"),
     }
 }
 
 fn selected_rule_specs(preset: Option<RulePreset>, ad_block: bool) -> Vec<&'static RuleSpec> {
+    if preset == Some(RulePreset::China) {
+        return CHINA_RULES
+            .iter()
+            .filter(|rule| ad_block || rule.name != "Ad Block")
+            .collect();
+    }
     let mut selected = Vec::new();
     for rule in RULES {
         let included = match preset {
@@ -682,6 +760,7 @@ fn selected_rule_specs(preset: Option<RulePreset>, ad_block: bool) -> Vec<&'stat
                     | "Telegram"
             ),
             Some(RulePreset::Comprehensive) => true,
+            Some(RulePreset::China) => unreachable!(),
         };
         if included || ad_block && rule.name == "Ad Block" {
             selected.push(rule);
@@ -939,7 +1018,11 @@ fn parse_vmess(uri: &str) -> Result<Node> {
     Ok(node)
 }
 
-fn render_singbox(nodes: &[Node], selected_rules: &[&RuleSpec]) -> Result<String> {
+fn render_singbox(
+    nodes: &[Node],
+    selected_rules: &[&RuleSpec],
+    china_optimized: bool,
+) -> Result<String> {
     let mut outbounds = nodes.iter().map(singbox_node).collect::<Vec<_>>();
     outbounds.push(json!({
         "type": "selector",
@@ -986,12 +1069,75 @@ fn render_singbox(nodes: &[Node], selected_rules: &[&RuleSpec]) -> Result<String
         }
         route_rules.push(Value::Object(route_rule));
     }
+    let dns = if china_optimized {
+        json!({
+            "servers": [
+                { "type": "local", "tag": "dns-local" },
+                {
+                    "type": "https",
+                    "tag": "dns-cn-ali",
+                    "server": "dns.alidns.com",
+                    "domain_resolver": "dns-local",
+                    "detour": "DIRECT"
+                },
+                {
+                    "type": "https",
+                    "tag": "dns-cn-tencent",
+                    "server": "doh.pub",
+                    "domain_resolver": "dns-local",
+                    "detour": "DIRECT"
+                },
+                {
+                    "type": "https",
+                    "tag": "dns-global",
+                    "server": "1.1.1.1",
+                    "tls": { "enabled": true, "server_name": "cloudflare-dns.com" },
+                    "detour": "PROXY"
+                }
+            ],
+            "rules": [
+                { "rule_set": "private", "action": "route", "server": "dns-local" },
+                {
+                    "rule_set": [
+                        "apple-cn",
+                        "microsoft@cn",
+                        "steam@cn",
+                        "category-games@cn",
+                        "bilibili"
+                    ],
+                    "action": "route",
+                    "server": "dns-cn-ali"
+                },
+                {
+                    "rule_set": ["geolocation-cn", "cn"],
+                    "action": "route",
+                    "server": "dns-cn-tencent"
+                }
+            ],
+            "final": "dns-global"
+        })
+    } else {
+        json!({
+            "servers": [{ "type": "udp", "tag": "dns", "server": "223.5.5.5" }],
+            "final": "dns"
+        })
+    };
+    let route = if china_optimized {
+        json!({
+            "rules": route_rules,
+            "rule_set": rule_sets,
+            "final": "PROXY",
+            "default_domain_resolver": "dns-local"
+        })
+    } else {
+        json!({ "rules": route_rules, "rule_set": rule_sets, "final": "PROXY" })
+    };
     Ok(serde_json::to_string(&json!({
         "log": { "level": "warn" },
-        "dns": { "servers": [{ "type": "udp", "tag": "dns", "server": "223.5.5.5" }], "final": "dns" },
+        "dns": dns,
         "inbounds": [],
         "outbounds": outbounds,
-        "route": { "rules": route_rules, "rule_set": rule_sets, "final": "PROXY" }
+        "route": route
     }))?)
 }
 
@@ -1056,7 +1202,12 @@ fn singbox_node(node: &Node) -> Value {
     Value::Object(output)
 }
 
-fn render_clash(nodes: &[Node], selected_rules: &[&RuleSpec], use_mrs: bool) -> String {
+fn render_clash(
+    nodes: &[Node],
+    selected_rules: &[&RuleSpec],
+    use_mrs: bool,
+    china_optimized: bool,
+) -> String {
     let mut output = String::from(
         "mixed-port: 7890\nmode: rule\nallow-lan: false\nlog-level: warning\nproxies:\n",
     );
@@ -1120,6 +1271,11 @@ fn render_clash(nodes: &[Node], selected_rules: &[&RuleSpec], use_mrs: bool) -> 
         let _ = writeln!(output, "      - {}", yaml_quote(&node.name));
     }
     output.push_str("      - DIRECT\n");
+    if china_optimized && use_mrs {
+        output.push_str(
+            "dns:\n  enable: true\n  ipv6: true\n  cache-algorithm: arc\n  enhanced-mode: fake-ip\n  fake-ip-range: 198.18.0.1/16\n  fake-ip-filter-mode: rule\n  fake-ip-filter:\n    - RULE-SET,private,real-ip\n    - RULE-SET,cn,real-ip\n    - MATCH,fake-ip\n  default-nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n  proxy-server-nameserver:\n    - https://dns.alidns.com/dns-query\n    - https://doh.pub/dns-query\n  direct-nameserver:\n    - https://dns.alidns.com/dns-query\n    - https://doh.pub/dns-query\n  direct-nameserver-follow-policy: true\n  nameserver:\n    - https://1.1.1.1/dns-query#PROXY\n    - https://8.8.8.8/dns-query#PROXY\n  nameserver-policy:\n    'rule-set:private':\n      - system\n    'rule-set:apple-cn':\n      - https://dns.alidns.com/dns-query\n      - https://doh.pub/dns-query\n    'rule-set:microsoft@cn':\n      - https://dns.alidns.com/dns-query\n      - https://doh.pub/dns-query\n    'rule-set:steam@cn':\n      - https://dns.alidns.com/dns-query\n      - https://doh.pub/dns-query\n    'rule-set:category-games@cn':\n      - https://dns.alidns.com/dns-query\n      - https://doh.pub/dns-query\n    'rule-set:bilibili':\n      - https://dns.alidns.com/dns-query\n      - https://doh.pub/dns-query\n    'rule-set:geolocation-cn':\n      - https://dns.alidns.com/dns-query\n      - https://doh.pub/dns-query\n    'rule-set:cn':\n      - https://dns.alidns.com/dns-query\n      - https://doh.pub/dns-query\n    'rule-set:geolocation-!cn':\n      - https://1.1.1.1/dns-query#PROXY\n      - https://8.8.8.8/dns-query#PROXY\n",
+        );
+    }
     if !selected_rules.is_empty() {
         let rule_format = if use_mrs { "mrs" } else { "yaml" };
         output.push_str("rule-providers:\n");
@@ -1131,6 +1287,9 @@ fn render_clash(nodes: &[Node], selected_rules: &[&RuleSpec], use_mrs: bool) -> 
                     yaml_quote(&format!("{SITE_RULE_BASE}{site}.{rule_format}")),
                     yaml_quote(&format!("./ruleset/{site}.{rule_format}"))
                 );
+                if china_optimized {
+                    output.push_str("    proxy: DIRECT\n");
+                }
             }
             for ip in rule.ips {
                 let _ = writeln!(
@@ -1139,6 +1298,9 @@ fn render_clash(nodes: &[Node], selected_rules: &[&RuleSpec], use_mrs: bool) -> 
                     yaml_quote(&format!("{IP_RULE_BASE}{ip}.{rule_format}")),
                     yaml_quote(&format!("./ruleset/{ip}-ip.{rule_format}"))
                 );
+                if china_optimized {
+                    output.push_str("    proxy: DIRECT\n");
+                }
             }
         }
     }
@@ -1164,8 +1326,12 @@ fn yaml_field(output: &mut String, key: &str, value: &str) {
     let _ = writeln!(output, "    {key}: {}", yaml_quote(value));
 }
 
-fn render_surge(nodes: &[Node], selected_rules: &[&RuleSpec]) -> String {
-    let mut output = String::from("[General]\nloglevel = notify\n\n[Proxy]\n");
+fn render_surge(nodes: &[Node], selected_rules: &[&RuleSpec], china_optimized: bool) -> String {
+    let mut output = String::from("[General]\nloglevel = notify\n");
+    if china_optimized {
+        output.push_str("dns-server = 223.5.5.5, 119.29.29.29\n");
+    }
+    output.push_str("\n[Proxy]\n");
     for node in nodes {
         let kind = if node.kind == "shadowsocks" {
             "ss"
@@ -1614,6 +1780,80 @@ mod tests {
             .body;
         assert!(comprehensive.contains("category-ads-all.conf,REJECT"));
         assert!(comprehensive.contains("netflix.conf,PROXY"));
+    }
+
+    #[test]
+    fn china_preset_orders_mainland_routes_and_split_dns() {
+        let service = SublinkService::default();
+        let clash = service
+            .convert_with_rules("clash", VLESS, Some("china"), true)
+            .unwrap()
+            .body;
+        assert!(clash.contains("enhanced-mode: fake-ip"));
+        assert!(clash.contains("https://1.1.1.1/dns-query#PROXY"));
+        assert!(clash.contains("    proxy: DIRECT"));
+        assert!(clash.contains("RULE-SET,category-ads-all,REJECT"));
+        assert!(clash.contains("RULE-SET,private,DIRECT"));
+        assert!(clash.contains("RULE-SET,apple-cn,DIRECT"));
+        assert!(clash.contains("RULE-SET,microsoft@cn,DIRECT"));
+        assert!(clash.contains("RULE-SET,steam@cn,DIRECT"));
+        assert!(clash.contains("RULE-SET,category-games@cn,DIRECT"));
+        assert!(clash.contains("RULE-SET,bilibili,DIRECT"));
+        assert!(!clash.contains("RULE-SET,apple,PROXY"));
+        assert!(!clash.contains("RULE-SET,microsoft,PROXY"));
+        assert!(
+            clash.find("RULE-SET,bilibili,DIRECT").unwrap()
+                < clash.find("RULE-SET,google,PROXY").unwrap()
+        );
+        assert!(
+            clash.find("RULE-SET,google,PROXY").unwrap()
+                < clash.find("RULE-SET,cn,DIRECT").unwrap()
+        );
+        assert!(
+            clash.find("RULE-SET,cn,DIRECT").unwrap()
+                < clash.find("RULE-SET,geolocation-!cn,PROXY").unwrap()
+        );
+
+        let legacy = service
+            .convert_with_rule_format("clash", VLESS, Some("china"), true, false)
+            .unwrap()
+            .body;
+        assert!(legacy.contains("format: yaml"));
+        assert!(!legacy.contains("enhanced-mode: fake-ip"));
+
+        let singbox = service
+            .convert_with_rules("singbox", VLESS, Some("china"), true)
+            .unwrap()
+            .body;
+        let singbox: Value = serde_json::from_str(&singbox).unwrap();
+        assert_eq!(singbox["dns"]["final"], "dns-global");
+        assert_eq!(singbox["dns"]["servers"][3]["detour"], "PROXY");
+        assert!(singbox.to_string().contains("dns-cn-ali"));
+        assert!(singbox.to_string().contains("dns-cn-tencent"));
+
+        let surge = service
+            .convert_with_rules("surge", VLESS, Some("china"), true)
+            .unwrap()
+            .body;
+        assert!(surge.contains("dns-server = 223.5.5.5, 119.29.29.29"));
+        assert!(surge.contains("apple-cn.conf,DIRECT"));
+    }
+
+    #[tokio::test]
+    async fn permanent_hy2_code_stays_stable_when_switching_to_china_rules() {
+        let service = SublinkService::default();
+        let config = "hysteria2://password@example.com:443/?sni=example.com#user";
+        let encoded = url::form_urlencoded::byte_serialize(config.as_bytes()).collect::<String>();
+        let balanced = format!(
+            "https://example.com/xray?config={encoded}&selectedRules=balanced&adblock=true"
+        );
+        let china =
+            format!("https://example.com/xray?config={encoded}&selectedRules=china&adblock=true");
+        let code = service.shorten_hy2(&balanced).await.unwrap();
+        assert_eq!(service.shorten_hy2(&china).await.unwrap(), code);
+        let output = service.auto(&code, "clash-verge/v2.5", "").await.unwrap();
+        assert!(output.body.contains("RULE-SET,apple-cn,DIRECT"));
+        assert!(output.body.contains("enhanced-mode: fake-ip"));
     }
 
     #[tokio::test]

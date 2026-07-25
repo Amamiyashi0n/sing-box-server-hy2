@@ -24,7 +24,7 @@ timeout_secs = 300
 # port = 443
 # sni = "hy2.example.com"
 # insecure = false
-# rule_preset = "balanced" # minimal, balanced, or comprehensive
+# rule_preset = "china" # china, minimal, balanced, or comprehensive
 # ad_block = false
 
 # Optional HTTP/3 response for unauthenticated/non-HY2 requests.

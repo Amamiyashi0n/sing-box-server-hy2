@@ -84,11 +84,14 @@ with their TTL so they survive process restarts while remaining bounded by the
 configured capacity. Remote HTTP(S) subscription fetching is intentionally
 disabled.
 
-The converter also implements the upstream Sublink Worker rule presets:
-`minimal`, `balanced`, and `comprehensive`, plus an independent ad-block
-option. Adaptive short links retain the selected preset and emit native remote
-rule sets for Sing-Box, Clash/Mihomo, and Surge. Xray output remains a Base64
-node subscription because that format has no routing-policy container.
+The converter implements the upstream Sublink Worker rule presets (`minimal`,
+`balanced`, and `comprehensive`) plus a `china` preset and an independent
+ad-block option. The China preset keeps private networks and mainland services
+direct, sends explicitly blocked or overseas services through the proxy, and
+uses split DNS for modern Mihomo and Sing-Box clients. Adaptive short links
+retain the selected preset and emit native remote rule sets for Sing-Box,
+Clash/Mihomo, and Surge. Xray output remains a Base64 node subscription because
+that format has no routing-policy container.
 
 Adaptive user subscriptions recognize Sing-Box/SFA/SFI/SFM, Mihomo and modern
 Clash clients (including Verge Rev, Meta for Android, FlClash, Nyanpasu,
@@ -112,7 +115,7 @@ server = "hy2.example.com"
 port = 443
 sni = "hy2.example.com"
 insecure = false
-rule_preset = "balanced" # minimal, balanced, or comprehensive
+rule_preset = "china" # china, minimal, balanced, or comprehensive
 ad_block = false
 ```
 
