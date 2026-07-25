@@ -41,6 +41,8 @@ struct Node {
     host: String,
     service_name: String,
     sni: String,
+    obfs: String,
+    obfs_password: String,
     flow: String,
     original: String,
     tls: bool,
@@ -63,6 +65,8 @@ impl Node {
             host: String::new(),
             service_name: String::new(),
             sni: String::new(),
+            obfs: String::new(),
+            obfs_password: String::new(),
             flow: String::new(),
             original: original.to_owned(),
             tls: false,
@@ -511,6 +515,8 @@ fn parse_url_node(uri: &str, kind: &str) -> Result<Node> {
     node.service_name = query_value(&url, &["serviceName"]);
     node.sni = query_value(&url, &["sni"]);
     node.flow = query_value(&url, &["flow"]);
+    node.obfs = query_value(&url, &["obfs"]);
+    node.obfs_password = query_value(&url, &["obfs-password", "obfsPassword"]);
     let security = query_value(&url, &["security"]);
     node.tls = !matches!(kind, "vless" | "vmess");
     if !security.is_empty() {
@@ -700,6 +706,12 @@ fn singbox_node(node: &Node) -> Value {
             }),
         );
     }
+    if node.kind == "hysteria2" && node.obfs == "salamander" {
+        output.insert(
+            "obfs".to_owned(),
+            json!({ "type": "salamander", "password": node.obfs_password }),
+        );
+    }
     if node.network != "tcp" && node.kind != "shadowsocks" {
         let mut transport = serde_json::Map::from_iter([("type".to_owned(), json!(node.network))]);
         if !node.path.is_empty() {
@@ -743,10 +755,18 @@ fn render_clash(nodes: &[Node]) -> String {
         }
         if node.tls {
             output.push_str("    tls: true\n");
-            yaml_field(&mut output, "servername", &node.sni);
+            if node.kind == "hysteria2" {
+                yaml_field(&mut output, "sni", &node.sni);
+            } else {
+                yaml_field(&mut output, "servername", &node.sni);
+            }
             if node.insecure {
                 output.push_str("    skip-cert-verify: true\n");
             }
+        }
+        if node.kind == "hysteria2" && node.obfs == "salamander" {
+            yaml_field(&mut output, "obfs", &node.obfs);
+            yaml_field(&mut output, "obfs-password", &node.obfs_password);
         }
         if node.network != "tcp" && node.kind != "shadowsocks" {
             yaml_field(&mut output, "network", &node.network);
@@ -1000,7 +1020,7 @@ mod tests {
     async fn permanent_hy2_short_links_survive_service_reload() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("hy2-short-links.toml");
-        let config = "hysteria2://password@example.com:443/?insecure=1#user";
+        let config = "hysteria2://password@example.com:443/?sni=example.com&insecure=1&obfs=salamander&obfs-password=obfs-secret#user";
         let raw = format!(
             "https://example.com/xray?config={}",
             url::form_urlencoded::byte_serialize(config.as_bytes()).collect::<String>()
@@ -1017,21 +1037,17 @@ mod tests {
     #[tokio::test]
     async fn automatic_hy2_short_links_match_client_format() {
         let service = SublinkService::default();
-        let config = "hysteria2://password@example.com:443/?insecure=1#user";
+        let config = "hysteria2://password@example.com:443/?sni=example.com&insecure=1&obfs=salamander&obfs-password=obfs-secret#user";
         let raw = format!(
             "https://example.com/xray?config={}",
             url::form_urlencoded::byte_serialize(config.as_bytes()).collect::<String>()
         );
         let code = service.shorten_hy2(&raw).await.unwrap();
         for user_agent in ["Clash Meta", "Clash Verge Rev"] {
-            assert!(
-                service
-                    .auto(&code, user_agent, "")
-                    .await
-                    .unwrap()
-                    .body
-                    .contains("proxies:")
-            );
+            let body = service.auto(&code, user_agent, "").await.unwrap().body;
+            assert!(body.contains("proxies:"));
+            assert!(body.contains("sni: 'example.com'"));
+            assert!(body.contains("obfs: 'salamander'"));
         }
         assert!(
             service
