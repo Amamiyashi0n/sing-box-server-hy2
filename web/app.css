@@ -4,7 +4,7 @@
   --sidebar: #171717;
   --surface: #2a2a2a;
   --surface-hover: #303030;
-  --input: #2b2b2b;
+  --input: #1d1d1d;
   --line: #383838;
   --line-soft: #303030;
   --text: #ececec;
@@ -94,10 +94,12 @@ h2 { font-size: 16px; font-weight: 600; }
 .field-grid.three .wide { grid-column: 1 / -1; }
 .field-grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .field { min-width: 0; display: block; }
-input, select, textarea { width: 100%; min-height: 40px; padding: 8px 11px; border: 1px solid transparent; border-radius: 7px; background: var(--input); color: var(--text); }
-input:hover, select:hover, textarea:hover { border-color: #454545; }
-input:focus, select:focus, textarea:focus { border-color: #666; }
-input::placeholder, textarea::placeholder { color: #686868; }
+input, select, textarea { width: 100%; min-height: 40px; padding: 8px 11px; border: 1px solid #4b4b4b; border-radius: 7px; background: var(--input); color: var(--text); }
+input:hover, select:hover, textarea:hover { border-color: #666; background: #202020; }
+input:focus, select:focus, textarea:focus { border-color: #9a9a9a; background: #202020; }
+input::placeholder, textarea::placeholder { color: #858585; }
+input[readonly], textarea[readonly] { border-color: #3f3f3f; background: #242424; color: var(--muted); }
+input:disabled, select:disabled, textarea:disabled { border-color: #393939; background: #252525; color: var(--subtle); cursor: not-allowed; }
 textarea { min-height: 104px; resize: vertical; line-height: 1.5; }
 .toggle-field { min-height: 68px; display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-end; }
 .switch { position: relative; display: block; width: 40px; height: 22px; }
