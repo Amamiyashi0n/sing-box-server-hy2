@@ -90,6 +90,13 @@ option. Adaptive short links retain the selected preset and emit native remote
 rule sets for Sing-Box, Clash/Mihomo, and Surge. Xray output remains a Base64
 node subscription because that format has no routing-policy container.
 
+Adaptive user subscriptions recognize Sing-Box/SFA/SFI/SFM, Mihomo and modern
+Clash clients (including Verge Rev, Meta for Android, FlClash, Nyanpasu,
+Mihomo Party, ClashMi, Stash), Surge, and Xray/V2Ray-style clients. Legacy
+Clash clients receive YAML rule providers instead of unsupported MRS files.
+User IPv4/IPv6 links are permanent; only converter-workspace links use the
+24-hour persisted TTL.
+
 The conversion behavior was rewritten in Rust from the MIT-licensed
 `Amamiyashi0n/sublink-worker-c` implementation; no C code, darkhttpd process,
 or secondary HTTP port is included.

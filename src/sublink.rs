@@ -424,6 +424,17 @@ impl SublinkService {
         selected_rules: Option<&str>,
         ad_block: bool,
     ) -> Result<SublinkOutput> {
+        self.convert_with_rule_format(format, input, selected_rules, ad_block, true)
+    }
+
+    fn convert_with_rule_format(
+        &self,
+        format: &str,
+        input: &str,
+        selected_rules: Option<&str>,
+        ad_block: bool,
+        clash_mrs: bool,
+    ) -> Result<SublinkOutput> {
         let nodes = parse_input(input)?;
         let preset = selected_rules.map(parse_rule_preset).transpose()?;
         let rules = selected_rule_specs(preset, ad_block);
@@ -434,7 +445,7 @@ impl SublinkService {
             )),
             "clash" => Ok(SublinkOutput::new(
                 "text/yaml; charset=utf-8",
-                render_clash(&nodes, &rules),
+                render_clash(&nodes, &rules, clash_mrs),
             )),
             "surge" => Ok(SublinkOutput::new(
                 "text/plain; charset=utf-8",
@@ -572,11 +583,13 @@ impl SublinkService {
         let config = query_value(&url, &["config"]);
         let selected_rules = query_value_optional(&url, &["selectedRules"]);
         let ad_block = query_bool(&url, &["adblock"]);
-        self.convert_with_rules(
-            auto_format(user_agent, accept),
+        let format = auto_format(user_agent, accept);
+        self.convert_with_rule_format(
+            format,
             &config,
             selected_rules.as_deref(),
             ad_block,
+            supports_mrs_format(user_agent),
         )
     }
 
@@ -1043,7 +1056,7 @@ fn singbox_node(node: &Node) -> Value {
     Value::Object(output)
 }
 
-fn render_clash(nodes: &[Node], selected_rules: &[&RuleSpec]) -> String {
+fn render_clash(nodes: &[Node], selected_rules: &[&RuleSpec], use_mrs: bool) -> String {
     let mut output = String::from(
         "mixed-port: 7890\nmode: rule\nallow-lan: false\nlog-level: warning\nproxies:\n",
     );
@@ -1108,22 +1121,23 @@ fn render_clash(nodes: &[Node], selected_rules: &[&RuleSpec]) -> String {
     }
     output.push_str("      - DIRECT\n");
     if !selected_rules.is_empty() {
+        let rule_format = if use_mrs { "mrs" } else { "yaml" };
         output.push_str("rule-providers:\n");
         for rule in selected_rules {
             for site in rule.sites {
                 let _ = writeln!(
                     output,
-                    "  {site}:\n    type: http\n    behavior: domain\n    format: mrs\n    url: {}\n    path: {}\n    interval: 86400",
-                    yaml_quote(&format!("{SITE_RULE_BASE}{site}.mrs")),
-                    yaml_quote(&format!("./ruleset/{site}.mrs"))
+                    "  {site}:\n    type: http\n    behavior: domain\n    format: {rule_format}\n    url: {}\n    path: {}\n    interval: 86400",
+                    yaml_quote(&format!("{SITE_RULE_BASE}{site}.{rule_format}")),
+                    yaml_quote(&format!("./ruleset/{site}.{rule_format}"))
                 );
             }
             for ip in rule.ips {
                 let _ = writeln!(
                     output,
-                    "  {ip}-ip:\n    type: http\n    behavior: ipcidr\n    format: mrs\n    url: {}\n    path: {}\n    interval: 86400",
-                    yaml_quote(&format!("{IP_RULE_BASE}{ip}.mrs")),
-                    yaml_quote(&format!("./ruleset/{ip}-ip.mrs"))
+                    "  {ip}-ip:\n    type: http\n    behavior: ipcidr\n    format: {rule_format}\n    url: {}\n    path: {}\n    interval: 86400",
+                    yaml_quote(&format!("{IP_RULE_BASE}{ip}.{rule_format}")),
+                    yaml_quote(&format!("./ruleset/{ip}-ip.{rule_format}"))
                 );
             }
         }
@@ -1243,10 +1257,14 @@ fn format_for_prefix(prefix: &str) -> Option<&'static str> {
 fn auto_format(user_agent: &str, accept: &str) -> &'static str {
     let user_agent = user_agent.to_ascii_lowercase();
     let accept = accept.to_ascii_lowercase();
-    if user_agent.contains("clash-meta")
-        || user_agent.contains("clash verge")
-        || user_agent.contains("clash")
+    if user_agent.contains("clash")
         || user_agent.contains("mihomo")
+        || user_agent.contains("verge")
+        || user_agent.contains("stash")
+        || user_agent.contains("flclash")
+        || user_agent.contains("nyanpasu")
+        || user_agent.contains("clashmi")
+        || user_agent.contains("sparkle")
         || accept.contains("yaml")
     {
         "clash"
@@ -1254,12 +1272,35 @@ fn auto_format(user_agent: &str, accept: &str) -> &'static str {
         "surge"
     } else if user_agent.contains("sing-box")
         || user_agent.contains("singbox")
+        || user_agent.starts_with("sfa/")
+        || user_agent.starts_with("sfi/")
+        || user_agent.starts_with("sfm/")
         || accept.contains("json")
     {
         "singbox"
     } else {
         "xray"
     }
+}
+
+fn supports_mrs_format(user_agent: &str) -> bool {
+    let user_agent = user_agent.to_ascii_lowercase();
+    if user_agent.contains("mihomo")
+        || user_agent.contains("meta")
+        || user_agent.contains("clash-verge")
+        || user_agent.contains("verge")
+        || user_agent.contains("stash")
+        || user_agent.contains("flclash")
+        || user_agent.contains("nyanpasu")
+        || user_agent.contains("clashmi")
+        || user_agent.contains("sparkle")
+    {
+        return true;
+    }
+    !user_agent.contains("merlin")
+        && !user_agent.contains("clashforwindows")
+        && !user_agent.contains("clashforandroid")
+        && !user_agent.contains("clash/")
 }
 
 fn split_short_path(path: &str) -> Result<(&str, &str)> {
@@ -1473,6 +1514,59 @@ mod tests {
             service.auto(&code, "xray", "").await.unwrap().content_type,
             "text/plain; charset=utf-8"
         );
+    }
+
+    #[tokio::test]
+    async fn adaptive_links_cover_common_client_families() {
+        let service = SublinkService::default();
+        let config = "hysteria2://password@example.com:443/?sni=example.com&insecure=1&obfs=salamander&obfs-password=obfs-secret#user";
+        let raw = format!(
+            "https://example.com/xray?config={}&selectedRules=comprehensive",
+            url::form_urlencoded::byte_serialize(config.as_bytes()).collect::<String>()
+        );
+        let code = service.shorten_hy2(&raw).await.unwrap();
+
+        for user_agent in [
+            "mihomo/1.19",
+            "clash-verge/v2.5",
+            "ClashMetaForAndroid/2.11",
+            "FlClash/0.8",
+            "Clash.Nyanpasu/2.0",
+            "Mihomo Party/1.8",
+            "ClashMi/1.0",
+            "Stash/2.6",
+        ] {
+            let body = service.auto(&code, user_agent, "").await.unwrap().body;
+            assert!(body.contains("type: 'hysteria2'"), "{user_agent}");
+            assert!(body.contains("format: mrs"), "{user_agent}");
+        }
+
+        for user_agent in [
+            "Clash/1.0",
+            "ClashForAndroid/2.5.12",
+            "ClashForWindows/0.20.0",
+            "Merlin Clash",
+        ] {
+            let body = service.auto(&code, user_agent, "").await.unwrap().body;
+            assert!(body.contains("format: yaml"), "{user_agent}");
+            assert!(!body.contains("format: mrs"), "{user_agent}");
+        }
+
+        for user_agent in [
+            "sing-box/1.14",
+            "SFA/1.14.0 (sing-box 1.14.0)",
+            "SFI/1.14.0",
+            "SFM/1.14.0",
+        ] {
+            let body = service.auto(&code, user_agent, "").await.unwrap().body;
+            assert!(body.contains("\"outbounds\""), "{user_agent}");
+            assert!(body.contains("category-ads-all.srs"), "{user_agent}");
+        }
+
+        let surge = service.auto(&code, "Surge/5.8", "").await.unwrap().body;
+        assert!(surge.starts_with("[General]"));
+        let universal = service.auto(&code, "v2rayN/7.0", "").await.unwrap();
+        assert_eq!(STANDARD.decode(universal.body).unwrap(), config.as_bytes());
     }
 
     #[tokio::test]
