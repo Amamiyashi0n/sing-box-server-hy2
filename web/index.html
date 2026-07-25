@@ -163,6 +163,16 @@
               <span class="switch"><input id="share-adblock" type="checkbox"><span></span></span>
             </label>
           </div>
+          <div class="field-grid two subscription-lists">
+            <label class="field">
+              <span>直连白名单</span>
+              <textarea id="share-whitelist" spellcheck="false" placeholder="每行一个域名，例如 example.cn 或 *.example.cn"></textarea>
+            </label>
+            <label class="field">
+              <span>拦截黑名单</span>
+              <textarea id="share-blacklist" spellcheck="false" placeholder="每行一个域名，例如 ads.example.com"></textarea>
+            </label>
+          </div>
           <div class="share-links" id="share-links"></div>
         </section>
         </div>
@@ -201,6 +211,16 @@
           <label class="toggle-field">
             <span>广告拦截</span>
             <span class="switch"><input id="converter-adblock" type="checkbox"><span></span></span>
+          </label>
+        </div>
+        <div class="field-grid two converter-rules">
+          <label class="field">
+            <span>直连白名单</span>
+            <textarea id="converter-whitelist" spellcheck="false" placeholder="每行一个域名"></textarea>
+          </label>
+          <label class="field">
+            <span>拦截黑名单</span>
+            <textarea id="converter-blacklist" spellcheck="false" placeholder="每行一个域名"></textarea>
           </label>
         </div>
         <div class="converter-tools">

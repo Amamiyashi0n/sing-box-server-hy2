@@ -117,7 +117,14 @@ sni = "hy2.example.com"
 insecure = false
 rule_preset = "china" # china, minimal, balanced, or comprehensive
 ad_block = false
+whitelist = ["example.cn", "*.internal.example.cn"] # forced DIRECT
+blacklist = ["ads.example.com"] # forced REJECT; evaluated before whitelist
 ```
+
+Custom whitelist and blacklist entries accept exact domains and suffixes in
+`*.example.com` or `.example.com` form. They are stored in permanent user
+subscriptions and 24-hour converter links. Blacklist rules are evaluated first,
+so a domain present in both lists is rejected.
 
 The generated URI includes authentication, TLS, and Salamander parameters, but
 intentionally excludes client-specific bandwidth settings.

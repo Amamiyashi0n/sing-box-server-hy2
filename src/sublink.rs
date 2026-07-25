@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     env,
     fmt::Write as _,
     fs,
@@ -17,7 +17,7 @@ use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
-use url::Url;
+use url::{Host, Url};
 
 const MAX_INPUT_BYTES: usize = 32 * 1024;
 const MAX_NODES: usize = 128;
@@ -53,6 +53,18 @@ struct RuleSpec {
     sites: &'static [&'static str],
     ips: &'static [&'static str],
     action: RuleAction,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum DomainRule {
+    Exact(String),
+    Suffix(String),
+}
+
+#[derive(Debug, Default)]
+struct CustomRules {
+    whitelist: Vec<DomainRule>,
+    blacklist: Vec<DomainRule>,
 }
 
 const RULES: &[RuleSpec] = &[
@@ -494,7 +506,27 @@ impl SublinkService {
         selected_rules: Option<&str>,
         ad_block: bool,
     ) -> Result<SublinkOutput> {
-        self.convert_with_rule_format(format, input, selected_rules, ad_block, true)
+        self.convert_with_custom_rules(format, input, selected_rules, ad_block, None, None)
+    }
+
+    pub fn convert_with_custom_rules(
+        &self,
+        format: &str,
+        input: &str,
+        selected_rules: Option<&str>,
+        ad_block: bool,
+        whitelist: Option<&str>,
+        blacklist: Option<&str>,
+    ) -> Result<SublinkOutput> {
+        self.convert_with_rule_format(
+            format,
+            input,
+            selected_rules,
+            ad_block,
+            whitelist,
+            blacklist,
+            true,
+        )
     }
 
     fn convert_with_rule_format(
@@ -503,24 +535,27 @@ impl SublinkService {
         input: &str,
         selected_rules: Option<&str>,
         ad_block: bool,
+        whitelist: Option<&str>,
+        blacklist: Option<&str>,
         clash_mrs: bool,
     ) -> Result<SublinkOutput> {
         let nodes = parse_input(input)?;
         let preset = selected_rules.map(parse_rule_preset).transpose()?;
         let rules = selected_rule_specs(preset, ad_block);
+        let custom_rules = parse_custom_rules(whitelist, blacklist)?;
         let china_optimized = preset == Some(RulePreset::China);
         match format {
             "singbox" => Ok(SublinkOutput::new(
                 "application/json; charset=utf-8",
-                render_singbox(&nodes, &rules, china_optimized)?,
+                render_singbox(&nodes, &rules, &custom_rules, china_optimized)?,
             )),
             "clash" => Ok(SublinkOutput::new(
                 "text/yaml; charset=utf-8",
-                render_clash(&nodes, &rules, clash_mrs, china_optimized),
+                render_clash(&nodes, &rules, &custom_rules, clash_mrs, china_optimized),
             )),
             "surge" => Ok(SublinkOutput::new(
                 "text/plain; charset=utf-8",
-                render_surge(&nodes, &rules, china_optimized),
+                render_surge(&nodes, &rules, &custom_rules, china_optimized),
             )),
             "xray" => Ok(SublinkOutput::new(
                 "text/plain; charset=utf-8",
@@ -581,6 +616,9 @@ impl SublinkService {
             parse_rule_preset(selected_rules)?;
         }
         let ad_block = query_bool(&url, &["adblock"]);
+        let whitelist = query_value_optional(&url, &["whitelist"]);
+        let blacklist = query_value_optional(&url, &["blacklist"]);
+        parse_custom_rules(whitelist.as_deref(), blacklist.as_deref())?;
         let query = {
             let mut serializer = url::form_urlencoded::Serializer::new(String::new());
             serializer.append_pair("config", &config);
@@ -589,6 +627,12 @@ impl SublinkService {
             }
             if ad_block {
                 serializer.append_pair("adblock", "true");
+            }
+            if let Some(whitelist) = whitelist.filter(|value| !value.trim().is_empty()) {
+                serializer.append_pair("whitelist", &whitelist);
+            }
+            if let Some(blacklist) = blacklist.filter(|value| !value.trim().is_empty()) {
+                serializer.append_pair("blacklist", &blacklist);
             }
             serializer.finish()
         };
@@ -616,6 +660,10 @@ impl SublinkService {
         if let Some(selected_rules) = query_value_optional(&url, &["selectedRules"]) {
             parse_rule_preset(&selected_rules)?;
         }
+        parse_custom_rules(
+            query_value_optional(&url, &["whitelist"]).as_deref(),
+            query_value_optional(&url, &["blacklist"]).as_deref(),
+        )?;
         let query = url
             .query()
             .filter(|query| !query.is_empty())
@@ -654,12 +702,16 @@ impl SublinkService {
         let config = query_value(&url, &["config"]);
         let selected_rules = query_value_optional(&url, &["selectedRules"]);
         let ad_block = query_bool(&url, &["adblock"]);
+        let whitelist = query_value_optional(&url, &["whitelist"]);
+        let blacklist = query_value_optional(&url, &["blacklist"]);
         let format = auto_format(user_agent, accept);
         self.convert_with_rule_format(
             format,
             &config,
             selected_rules.as_deref(),
             ad_block,
+            whitelist.as_deref(),
+            blacklist.as_deref(),
             supports_mrs_format(user_agent),
         )
     }
@@ -722,6 +774,58 @@ fn query_value_optional(url: &Url, names: &[&str]) -> Option<String> {
 fn query_bool(url: &Url, names: &[&str]) -> bool {
     query_value(url, names).trim().eq_ignore_ascii_case("true")
         || query_value(url, names).trim() == "1"
+}
+
+fn parse_custom_rules(whitelist: Option<&str>, blacklist: Option<&str>) -> Result<CustomRules> {
+    Ok(CustomRules {
+        whitelist: parse_domain_rules(whitelist.unwrap_or_default(), "whitelist")?,
+        blacklist: parse_domain_rules(blacklist.unwrap_or_default(), "blacklist")?,
+    })
+}
+
+fn parse_domain_rules(value: &str, label: &str) -> Result<Vec<DomainRule>> {
+    ensure!(value.len() <= 8 * 1024, "{label} is too large");
+    let mut seen = HashSet::new();
+    let mut rules = Vec::new();
+    for raw in value.split([',', '\n', '\r']) {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            continue;
+        }
+        let (suffix, domain) = if let Some(domain) = raw.strip_prefix("*.") {
+            (true, domain)
+        } else if let Some(domain) = raw.strip_prefix('.') {
+            (true, domain)
+        } else {
+            (false, raw)
+        };
+        let domain = domain.trim_end_matches('.');
+        ensure!(
+            !domain.is_empty() && !domain.contains('*') && !domain.chars().any(char::is_whitespace),
+            "invalid {label} domain: {raw}"
+        );
+        let domain =
+            match Host::parse(domain).map_err(|_| anyhow!("invalid {label} domain: {raw}"))? {
+                Host::Domain(domain) => domain,
+                Host::Ipv4(_) | Host::Ipv6(_) => bail!("{label} only supports domain names: {raw}"),
+            };
+        let rule = if suffix {
+            DomainRule::Suffix(domain)
+        } else {
+            DomainRule::Exact(domain)
+        };
+        if seen.insert(rule.clone()) {
+            rules.push(rule);
+        }
+    }
+    ensure!(rules.len() <= 128, "too many {label} domains");
+    Ok(rules)
+}
+
+pub(crate) fn validate_custom_rule_values(values: &[String], label: &str) -> Result<()> {
+    let joined = values.join("\n");
+    parse_domain_rules(&joined, label)?;
+    Ok(())
 }
 
 fn parse_rule_preset(value: &str) -> Result<RulePreset> {
@@ -1021,6 +1125,7 @@ fn parse_vmess(uri: &str) -> Result<Node> {
 fn render_singbox(
     nodes: &[Node],
     selected_rules: &[&RuleSpec],
+    custom_rules: &CustomRules,
     china_optimized: bool,
 ) -> Result<String> {
     let mut outbounds = nodes.iter().map(singbox_node).collect::<Vec<_>>();
@@ -1031,6 +1136,16 @@ fn render_singbox(
     }));
     outbounds.push(json!({ "type": "direct", "tag": "DIRECT" }));
     let mut route_rules = Vec::new();
+    push_singbox_custom_rule(
+        &mut route_rules,
+        &custom_rules.blacklist,
+        RuleAction::Reject,
+    );
+    push_singbox_custom_rule(
+        &mut route_rules,
+        &custom_rules.whitelist,
+        RuleAction::Direct,
+    );
     let mut rule_sets = Vec::new();
     for rule in selected_rules {
         let mut tags = Vec::new();
@@ -1070,6 +1185,33 @@ fn render_singbox(
         route_rules.push(Value::Object(route_rule));
     }
     let dns = if china_optimized {
+        let mut dns_rules = Vec::new();
+        push_singbox_dns_rule(&mut dns_rules, &custom_rules.blacklist, "reject", None);
+        push_singbox_dns_rule(
+            &mut dns_rules,
+            &custom_rules.whitelist,
+            "route",
+            Some("dns-cn-ali"),
+        );
+        dns_rules.extend([
+            json!({ "rule_set": "private", "action": "route", "server": "dns-local" }),
+            json!({
+                "rule_set": [
+                    "apple-cn",
+                    "microsoft@cn",
+                    "steam@cn",
+                    "category-games@cn",
+                    "bilibili"
+                ],
+                "action": "route",
+                "server": "dns-cn-ali"
+            }),
+            json!({
+                "rule_set": ["geolocation-cn", "cn"],
+                "action": "route",
+                "server": "dns-cn-tencent"
+            }),
+        ]);
         json!({
             "servers": [
                 { "type": "local", "tag": "dns-local" },
@@ -1095,25 +1237,7 @@ fn render_singbox(
                     "detour": "PROXY"
                 }
             ],
-            "rules": [
-                { "rule_set": "private", "action": "route", "server": "dns-local" },
-                {
-                    "rule_set": [
-                        "apple-cn",
-                        "microsoft@cn",
-                        "steam@cn",
-                        "category-games@cn",
-                        "bilibili"
-                    ],
-                    "action": "route",
-                    "server": "dns-cn-ali"
-                },
-                {
-                    "rule_set": ["geolocation-cn", "cn"],
-                    "action": "route",
-                    "server": "dns-cn-tencent"
-                }
-            ],
+            "rules": dns_rules,
             "final": "dns-global"
         })
     } else {
@@ -1139,6 +1263,67 @@ fn render_singbox(
         "outbounds": outbounds,
         "route": route
     }))?)
+}
+
+fn domain_rule_fields(rules: &[DomainRule]) -> (Vec<&str>, Vec<&str>) {
+    let mut exact = Vec::new();
+    let mut suffix = Vec::new();
+    for rule in rules {
+        match rule {
+            DomainRule::Exact(domain) => exact.push(domain.as_str()),
+            DomainRule::Suffix(domain) => suffix.push(domain.as_str()),
+        }
+    }
+    (exact, suffix)
+}
+
+fn push_singbox_custom_rule(output: &mut Vec<Value>, rules: &[DomainRule], action: RuleAction) {
+    if rules.is_empty() {
+        return;
+    }
+    let (exact, suffix) = domain_rule_fields(rules);
+    let mut rule = serde_json::Map::new();
+    if !exact.is_empty() {
+        rule.insert("domain".to_owned(), json!(exact));
+    }
+    if !suffix.is_empty() {
+        rule.insert("domain_suffix".to_owned(), json!(suffix));
+    }
+    match action {
+        RuleAction::Direct => {
+            rule.insert("outbound".to_owned(), json!("DIRECT"));
+        }
+        RuleAction::Reject => {
+            rule.insert("action".to_owned(), json!("reject"));
+        }
+        RuleAction::Proxy => {
+            rule.insert("outbound".to_owned(), json!("PROXY"));
+        }
+    }
+    output.push(Value::Object(rule));
+}
+
+fn push_singbox_dns_rule(
+    output: &mut Vec<Value>,
+    rules: &[DomainRule],
+    action: &str,
+    server: Option<&str>,
+) {
+    if rules.is_empty() {
+        return;
+    }
+    let (exact, suffix) = domain_rule_fields(rules);
+    let mut rule = serde_json::Map::from_iter([("action".to_owned(), json!(action))]);
+    if !exact.is_empty() {
+        rule.insert("domain".to_owned(), json!(exact));
+    }
+    if !suffix.is_empty() {
+        rule.insert("domain_suffix".to_owned(), json!(suffix));
+    }
+    if let Some(server) = server {
+        rule.insert("server".to_owned(), json!(server));
+    }
+    output.push(Value::Object(rule));
 }
 
 fn singbox_node(node: &Node) -> Value {
@@ -1205,6 +1390,7 @@ fn singbox_node(node: &Node) -> Value {
 fn render_clash(
     nodes: &[Node],
     selected_rules: &[&RuleSpec],
+    custom_rules: &CustomRules,
     use_mrs: bool,
     china_optimized: bool,
 ) -> String {
@@ -1273,7 +1459,13 @@ fn render_clash(
     output.push_str("      - DIRECT\n");
     if china_optimized && use_mrs {
         output.push_str(
-            "dns:\n  enable: true\n  ipv6: true\n  cache-algorithm: arc\n  enhanced-mode: fake-ip\n  fake-ip-range: 198.18.0.1/16\n  fake-ip-filter-mode: rule\n  fake-ip-filter:\n    - RULE-SET,private,real-ip\n    - RULE-SET,cn,real-ip\n    - MATCH,fake-ip\n  default-nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n  proxy-server-nameserver:\n    - https://dns.alidns.com/dns-query\n    - https://doh.pub/dns-query\n  direct-nameserver:\n    - https://dns.alidns.com/dns-query\n    - https://doh.pub/dns-query\n  direct-nameserver-follow-policy: true\n  nameserver:\n    - https://1.1.1.1/dns-query#PROXY\n    - https://8.8.8.8/dns-query#PROXY\n  nameserver-policy:\n    'rule-set:private':\n      - system\n    'rule-set:apple-cn':\n      - https://dns.alidns.com/dns-query\n      - https://doh.pub/dns-query\n    'rule-set:microsoft@cn':\n      - https://dns.alidns.com/dns-query\n      - https://doh.pub/dns-query\n    'rule-set:steam@cn':\n      - https://dns.alidns.com/dns-query\n      - https://doh.pub/dns-query\n    'rule-set:category-games@cn':\n      - https://dns.alidns.com/dns-query\n      - https://doh.pub/dns-query\n    'rule-set:bilibili':\n      - https://dns.alidns.com/dns-query\n      - https://doh.pub/dns-query\n    'rule-set:geolocation-cn':\n      - https://dns.alidns.com/dns-query\n      - https://doh.pub/dns-query\n    'rule-set:cn':\n      - https://dns.alidns.com/dns-query\n      - https://doh.pub/dns-query\n    'rule-set:geolocation-!cn':\n      - https://1.1.1.1/dns-query#PROXY\n      - https://8.8.8.8/dns-query#PROXY\n",
+            "dns:\n  enable: true\n  ipv6: true\n  cache-algorithm: arc\n  enhanced-mode: fake-ip\n  fake-ip-range: 198.18.0.1/16\n  fake-ip-filter-mode: rule\n  fake-ip-filter:\n    - RULE-SET,private,real-ip\n    - RULE-SET,cn,real-ip\n",
+        );
+        for rule in &custom_rules.whitelist {
+            write_clash_domain_rule(&mut output, rule, "real-ip", "    - ");
+        }
+        output.push_str(
+            "    - MATCH,fake-ip\n  default-nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n  proxy-server-nameserver:\n    - https://dns.alidns.com/dns-query\n    - https://doh.pub/dns-query\n  direct-nameserver:\n    - https://dns.alidns.com/dns-query\n    - https://doh.pub/dns-query\n  direct-nameserver-follow-policy: true\n  nameserver:\n    - https://1.1.1.1/dns-query#PROXY\n    - https://8.8.8.8/dns-query#PROXY\n  nameserver-policy:\n    'rule-set:private':\n      - system\n    'rule-set:apple-cn':\n      - https://dns.alidns.com/dns-query\n      - https://doh.pub/dns-query\n    'rule-set:microsoft@cn':\n      - https://dns.alidns.com/dns-query\n      - https://doh.pub/dns-query\n    'rule-set:steam@cn':\n      - https://dns.alidns.com/dns-query\n      - https://doh.pub/dns-query\n    'rule-set:category-games@cn':\n      - https://dns.alidns.com/dns-query\n      - https://doh.pub/dns-query\n    'rule-set:bilibili':\n      - https://dns.alidns.com/dns-query\n      - https://doh.pub/dns-query\n    'rule-set:geolocation-cn':\n      - https://dns.alidns.com/dns-query\n      - https://doh.pub/dns-query\n    'rule-set:cn':\n      - https://dns.alidns.com/dns-query\n      - https://doh.pub/dns-query\n    'rule-set:geolocation-!cn':\n      - https://1.1.1.1/dns-query#PROXY\n      - https://8.8.8.8/dns-query#PROXY\n",
         );
     }
     if !selected_rules.is_empty() {
@@ -1305,6 +1497,12 @@ fn render_clash(
         }
     }
     output.push_str("rules:\n");
+    for rule in &custom_rules.blacklist {
+        write_clash_domain_rule(&mut output, rule, "REJECT", "  - ");
+    }
+    for rule in &custom_rules.whitelist {
+        write_clash_domain_rule(&mut output, rule, "DIRECT", "  - ");
+    }
     for rule in selected_rules {
         let policy = rule_policy(rule.action);
         for site in rule.sites {
@@ -1318,6 +1516,14 @@ fn render_clash(
     output
 }
 
+fn write_clash_domain_rule(output: &mut String, rule: &DomainRule, policy: &str, prefix: &str) {
+    let (kind, domain) = match rule {
+        DomainRule::Exact(domain) => ("DOMAIN", domain),
+        DomainRule::Suffix(domain) => ("DOMAIN-SUFFIX", domain),
+    };
+    let _ = writeln!(output, "{prefix}{kind},{domain},{policy}");
+}
+
 fn yaml_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''").replace(['\r', '\n'], " "))
 }
@@ -1326,7 +1532,12 @@ fn yaml_field(output: &mut String, key: &str, value: &str) {
     let _ = writeln!(output, "    {key}: {}", yaml_quote(value));
 }
 
-fn render_surge(nodes: &[Node], selected_rules: &[&RuleSpec], china_optimized: bool) -> String {
+fn render_surge(
+    nodes: &[Node],
+    selected_rules: &[&RuleSpec],
+    custom_rules: &CustomRules,
+    china_optimized: bool,
+) -> String {
     let mut output = String::from("[General]\nloglevel = notify\n");
     if china_optimized {
         output.push_str("dns-server = 223.5.5.5, 119.29.29.29\n");
@@ -1379,6 +1590,12 @@ fn render_surge(nodes: &[Node], selected_rules: &[&RuleSpec], china_optimized: b
             .join(","),
     );
     output.push_str(",DIRECT\n\n[Rule]\n");
+    for rule in &custom_rules.blacklist {
+        write_clash_domain_rule(&mut output, rule, "REJECT", "");
+    }
+    for rule in &custom_rules.whitelist {
+        write_clash_domain_rule(&mut output, rule, "DIRECT", "");
+    }
     for rule in selected_rules {
         let policy = rule_policy(rule.action);
         for site in rule.sites {
@@ -1815,7 +2032,7 @@ mod tests {
         );
 
         let legacy = service
-            .convert_with_rule_format("clash", VLESS, Some("china"), true, false)
+            .convert_with_rule_format("clash", VLESS, Some("china"), true, None, None, false)
             .unwrap()
             .body;
         assert!(legacy.contains("format: yaml"));
@@ -1854,6 +2071,89 @@ mod tests {
         let output = service.auto(&code, "clash-verge/v2.5", "").await.unwrap();
         assert!(output.body.contains("RULE-SET,apple-cn,DIRECT"));
         assert!(output.body.contains("enhanced-mode: fake-ip"));
+    }
+
+    #[test]
+    fn custom_domain_lists_render_with_blacklist_priority() {
+        let service = SublinkService::default();
+        let whitelist = "direct.example\n*.shared.example";
+        let blacklist = "blocked.example\n.shared.example";
+        let clash = service
+            .convert_with_custom_rules(
+                "clash",
+                VLESS,
+                Some("china"),
+                false,
+                Some(whitelist),
+                Some(blacklist),
+            )
+            .unwrap()
+            .body;
+        assert!(clash.contains("DOMAIN,direct.example,DIRECT"));
+        assert!(clash.contains("DOMAIN,blocked.example,REJECT"));
+        assert!(clash.contains("DOMAIN-SUFFIX,shared.example,REJECT"));
+        assert!(clash.contains("DOMAIN-SUFFIX,shared.example,DIRECT"));
+        assert!(
+            clash.find("DOMAIN-SUFFIX,shared.example,REJECT").unwrap()
+                < clash.find("DOMAIN-SUFFIX,shared.example,DIRECT").unwrap()
+        );
+        assert!(clash.contains("DOMAIN,direct.example,real-ip"));
+
+        let singbox = service
+            .convert_with_custom_rules(
+                "singbox",
+                VLESS,
+                Some("china"),
+                false,
+                Some(whitelist),
+                Some(blacklist),
+            )
+            .unwrap()
+            .body;
+        let singbox: Value = serde_json::from_str(&singbox).unwrap();
+        assert_eq!(singbox["route"]["rules"][0]["action"], "reject");
+        assert_eq!(singbox["route"]["rules"][1]["outbound"], "DIRECT");
+        assert_eq!(singbox["dns"]["rules"][0]["action"], "reject");
+        assert_eq!(singbox["dns"]["rules"][1]["server"], "dns-cn-ali");
+
+        let surge = service
+            .convert_with_custom_rules(
+                "surge",
+                VLESS,
+                Some("china"),
+                false,
+                Some(whitelist),
+                Some(blacklist),
+            )
+            .unwrap()
+            .body;
+        assert!(surge.contains("DOMAIN,blocked.example,REJECT"));
+        assert!(surge.contains("DOMAIN,direct.example,DIRECT"));
+    }
+
+    #[test]
+    fn custom_domain_lists_validate_and_deduplicate() {
+        let rules =
+            parse_domain_rules("Example.COM\nexample.com\n*.Example.NET", "whitelist").unwrap();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0], DomainRule::Exact("example.com".to_owned()));
+        assert_eq!(rules[1], DomainRule::Suffix("example.net".to_owned()));
+        assert!(parse_domain_rules("https://example.com", "blacklist").is_err());
+        assert!(parse_domain_rules("192.0.2.1", "blacklist").is_err());
+    }
+
+    #[tokio::test]
+    async fn permanent_short_links_keep_custom_lists_without_changing_code() {
+        let service = SublinkService::default();
+        let config = "hysteria2://password@example.com:443/?sni=example.com#user";
+        let encoded = url::form_urlencoded::byte_serialize(config.as_bytes()).collect::<String>();
+        let plain = format!("https://example.com/xray?config={encoded}&selectedRules=china");
+        let custom = format!("{plain}&whitelist=direct.example&blacklist=blocked.example");
+        let code = service.shorten_hy2(&plain).await.unwrap();
+        assert_eq!(service.shorten_hy2(&custom).await.unwrap(), code);
+        let output = service.auto(&code, "clash-verge/v2.5", "").await.unwrap();
+        assert!(output.body.contains("DOMAIN,direct.example,DIRECT"));
+        assert!(output.body.contains("DOMAIN,blocked.example,REJECT"));
     }
 
     #[tokio::test]

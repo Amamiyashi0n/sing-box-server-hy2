@@ -117,6 +117,7 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.5; }
 .user-index { color: var(--subtle); font-size: 10px; margin-bottom: 7px; }
 .empty { padding: 18px 0; color: var(--subtle); font-size: 12px; }
 .subscription-options { margin-bottom: 16px; }
+.subscription-lists { margin-bottom: 16px; align-items: stretch; }
 .share-links { display: grid; gap: 8px; }
 .share-link-card { min-width: 0; padding: 14px; border-radius: 8px; background: var(--surface); }
 .share-link-user { min-width: 0; padding-bottom: 11px; border-bottom: 1px solid var(--line); }

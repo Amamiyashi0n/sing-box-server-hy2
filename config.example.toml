@@ -26,6 +26,8 @@ timeout_secs = 300
 # insecure = false
 # rule_preset = "china" # china, minimal, balanced, or comprehensive
 # ad_block = false
+# whitelist = ["example.cn", "*.internal.example.cn"] # forced DIRECT
+# blacklist = ["ads.example.com"] # forced REJECT
 
 # Optional HTTP/3 response for unauthenticated/non-HY2 requests.
 # [masquerade]

@@ -14,6 +14,8 @@ const state = {
     source: localStorage.getItem("sublink-source") || "",
     rulePreset: localStorage.getItem("sublink-rule-preset") || "balanced",
     adBlock: localStorage.getItem("sublink-adblock") === "true",
+    whitelist: localStorage.getItem("sublink-whitelist") || "",
+    blacklist: localStorage.getItem("sublink-blacklist") || "",
     links: null,
     busy: false
   }
@@ -198,6 +200,8 @@ async function loadConfig() {
   $("#share-insecure").checked = Boolean(config.share?.insecure);
   state.shareRulePreset = config.share?.rule_preset || "balanced";
   state.shareAdBlock = Boolean(config.share?.ad_block);
+  $("#share-whitelist").value = (config.share?.whitelist || []).join("\n");
+  $("#share-blacklist").value = (config.share?.blacklist || []).join("\n");
   $("#up-mbps").value = config.bandwidth?.up_mbps ?? 0;
   $("#down-mbps").value = config.bandwidth?.down_mbps ?? 0;
   $("#ignore-bandwidth").checked = Boolean(config.bandwidth?.ignore_client_bandwidth);
@@ -442,6 +446,10 @@ async function generateShareShortLinks() {
       if (state.shareAdBlock && state.shareRulePreset !== "comprehensive") {
         longUrl.searchParams.set("adblock", "true");
       }
+      const whitelist = $("#share-whitelist").value.trim();
+      const blacklist = $("#share-blacklist").value.trim();
+      if (whitelist) longUrl.searchParams.set("whitelist", whitelist);
+      if (blacklist) longUrl.searchParams.set("blacklist", blacklist);
       const shorten = new URL("/shorten-hy2", window.location.origin);
       shorten.searchParams.set("url", longUrl.toString());
       const response = await fetch(shorten);
@@ -479,6 +487,8 @@ function renderConverter() {
   $("#converter-rule-preset").value = state.converter.rulePreset;
   $("#converter-adblock").checked = state.converter.adBlock || state.converter.rulePreset === "comprehensive";
   $("#converter-adblock").disabled = state.converter.rulePreset === "comprehensive";
+  $("#converter-whitelist").value = state.converter.whitelist;
+  $("#converter-blacklist").value = state.converter.blacklist;
   $("#converter-generate").disabled = state.converter.busy;
   $("#converter-generate").textContent = state.converter.busy ? "生成中" : "生成订阅";
   renderConverterResults();
@@ -535,6 +545,8 @@ async function generateConverterLinks() {
     if (state.converter.adBlock && state.converter.rulePreset !== "comprehensive") {
       longUrl.searchParams.set("adblock", "true");
     }
+    if (state.converter.whitelist.trim()) longUrl.searchParams.set("whitelist", state.converter.whitelist);
+    if (state.converter.blacklist.trim()) longUrl.searchParams.set("blacklist", state.converter.blacklist);
     const shorten = new URL("/shorten-auto", window.location.origin);
     shorten.searchParams.set("url", longUrl.toString());
     const response = await fetch(shorten);
@@ -604,9 +616,15 @@ function collectConfig() {
       sni: $("#share-sni").value.trim(),
       insecure: $("#share-insecure").checked,
       rule_preset: state.shareRulePreset,
-      ad_block: state.shareAdBlock
+      ad_block: state.shareAdBlock,
+      whitelist: ruleListValues($("#share-whitelist").value),
+      blacklist: ruleListValues($("#share-blacklist").value)
     } : null
   };
+}
+
+function ruleListValues(value) {
+  return value.split(/\r?\n/).map(item => item.trim()).filter(Boolean);
 }
 
 async function saveConfig(event) {
@@ -681,6 +699,17 @@ function bindEvents() {
     renderConverter();
     setConverterStatus();
   });
+  for (const [selector, key, storage] of [
+    ["#converter-whitelist", "whitelist", "sublink-whitelist"],
+    ["#converter-blacklist", "blacklist", "sublink-blacklist"]
+  ]) {
+    $(selector).addEventListener("input", event => {
+      state.converter[key] = event.target.value;
+      state.converter.links = null;
+      localStorage.setItem(storage, state.converter[key]);
+      setConverterStatus();
+    });
+  }
   $("#converter-generate").addEventListener("click", generateConverterLinks);
   $("#converter-clear").addEventListener("click", () => {
     state.converter.source = "";

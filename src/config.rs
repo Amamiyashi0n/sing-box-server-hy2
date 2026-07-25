@@ -76,6 +76,10 @@ pub struct ShareConfig {
     pub rule_preset: String,
     #[serde(default)]
     pub ad_block: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub whitelist: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blacklist: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -236,6 +240,8 @@ impl Config {
                 ),
                 "share rule preset must be minimal, balanced, comprehensive, or china"
             );
+            crate::sublink::validate_custom_rule_values(&share.whitelist, "whitelist")?;
+            crate::sublink::validate_custom_rule_values(&share.blacklist, "blacklist")?;
         }
         Ok(())
     }
@@ -265,6 +271,8 @@ mod tests {
             insecure: false,
             rule_preset: "balanced".to_owned(),
             ad_block: false,
+            whitelist: Vec::new(),
+            blacklist: Vec::new(),
         });
         let encoded = config.to_toml().unwrap();
         assert!(encoded.contains("server = \"198.51.100.10\""));
@@ -290,6 +298,8 @@ mod tests {
             insecure: false,
             rule_preset: "balanced".to_owned(),
             ad_block: false,
+            whitelist: Vec::new(),
+            blacklist: Vec::new(),
         });
         assert!(config.validate().is_ok());
         assert!(config.to_toml().unwrap().contains("2001:db8::10"));
@@ -304,5 +314,17 @@ mod tests {
         assert!(config.validate().is_ok());
         let encoded = config.to_toml().unwrap();
         assert!(encoded.contains("rule_preset = \"china\""));
+    }
+
+    #[test]
+    fn share_config_validates_custom_domain_lists() {
+        let mut config = base_config();
+        config.share.as_mut().unwrap().whitelist =
+            vec!["example.cn".to_owned(), "*.internal.example.cn".to_owned()];
+        config.share.as_mut().unwrap().blacklist = vec!["ads.example.com".to_owned()];
+        assert!(config.validate().is_ok());
+
+        config.share.as_mut().unwrap().blacklist = vec!["https://example.com/path".to_owned()];
+        assert!(config.validate().is_err());
     }
 }

@@ -531,10 +531,16 @@ fn sublink_convert(
     let selected_rules = uri_parameter(&uri, "selectedRules");
     let ad_block = uri_parameter(&uri, "adblock")
         .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
-    match state
-        .sublink
-        .convert_with_rules(format, &input, selected_rules.as_deref(), ad_block)
-    {
+    let whitelist = uri_parameter(&uri, "whitelist");
+    let blacklist = uri_parameter(&uri, "blacklist");
+    match state.sublink.convert_with_custom_rules(
+        format,
+        &input,
+        selected_rules.as_deref(),
+        ad_block,
+        whitelist.as_deref(),
+        blacklist.as_deref(),
+    ) {
         Ok(output) => (
             [
                 (header::CONTENT_TYPE, output.content_type),
