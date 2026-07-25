@@ -303,16 +303,26 @@ impl SublinkService {
                 .any(|format| url.path() == format!("/{format}")),
             "invalid URL parameter"
         );
-        let query = url
-            .query()
-            .filter(|query| !query.is_empty())
+        let raw_config = raw_url
+            .split_once("?config=")
+            .map(|(_, value)| value)
             .ok_or_else(|| anyhow!("invalid URL parameter"))?;
-        ensure!(query.len() <= MAX_INPUT_BYTES, "URL parameter is too large");
+        let config = percent_decode_str(raw_config)
+            .decode_utf8()
+            .map_err(|_| anyhow!("invalid URL parameter"))?
+            .into_owned();
+        ensure!(!config.is_empty(), "invalid URL parameter");
+        ensure!(
+            config.len() <= MAX_INPUT_BYTES,
+            "URL parameter is too large"
+        );
+        let encoded_config =
+            url::form_urlencoded::byte_serialize(config.as_bytes()).collect::<String>();
         let code = random_code()?;
         self.store
             .lock()
             .await
-            .put(code.clone(), format!("?{query}"))?;
+            .put(code.clone(), format!("?config={encoded_config}"))?;
         Ok(code)
     }
 
@@ -1028,5 +1038,17 @@ mod tests {
             service.auto(&code, "xray", "").await.unwrap().content_type,
             "text/plain; charset=utf-8"
         );
+    }
+
+    #[tokio::test]
+    async fn automatic_converter_short_links_keep_full_proxy_query() {
+        let service = SublinkService::default();
+        let raw = format!(
+            "https://example.com/xray?config={}",
+            url::form_urlencoded::byte_serialize(VLESS.as_bytes()).collect::<String>()
+        );
+        let code = service.shorten_auto(&raw).await.unwrap();
+        let output = service.auto(&code, "Clash Meta", "").await.unwrap();
+        assert!(output.body.contains("edge.example.com"));
     }
 }
