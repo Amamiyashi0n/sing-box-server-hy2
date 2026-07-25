@@ -20,6 +20,7 @@ timeout_secs = 300
 # Optional metadata used to generate client sharing links in the WebUI.
 # [share]
 # server = "hy2.example.com"
+# ipv6_server = "2001:db8::10"
 # port = 443
 # sni = "hy2.example.com"
 # insecure = false

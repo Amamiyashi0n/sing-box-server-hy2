@@ -123,7 +123,7 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.5; }
 .share-protocol { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 14px; padding-top: 12px; }
 .share-protocol-name { padding-top: 11px; color: var(--muted); font-size: 11px; font-weight: 600; }
 .share-link-fields { min-width: 0; display: grid; gap: 8px; }
-.share-link-line { min-width: 0; display: grid; grid-template-columns: 54px minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.share-link-line { min-width: 0; display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; gap: 8px; align-items: center; }
 .share-link-line > span { color: var(--subtle); font-size: 11px; }
 .share-link-line input { min-width: 0; background: #232323; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
 .masquerade-panel { margin-top: 17px; padding-top: 17px; border-top: 1px solid var(--line-soft); }

@@ -98,6 +98,8 @@ URI per configured user:
 ```toml
 [share]
 server = "hy2.example.com"
+# Optional independent IPv6 subscription endpoint:
+# ipv6_server = "2001:db8::10"
 port = 443
 sni = "hy2.example.com"
 insecure = false

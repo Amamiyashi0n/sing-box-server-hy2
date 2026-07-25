@@ -63,7 +63,10 @@ pub struct ObfsConfig {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ShareConfig {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub server: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub ipv6_server: String,
     pub port: u16,
     #[serde(default)]
     pub sni: String,
@@ -211,8 +214,8 @@ impl Config {
         }
         if let Some(share) = &self.share {
             ensure!(
-                !share.server.trim().is_empty(),
-                "share server address must not be empty"
+                !share.server.trim().is_empty() || !share.ipv6_server.trim().is_empty(),
+                "at least one share server address is required"
             );
             ensure!(
                 share.port > 0,
@@ -220,5 +223,51 @@ impl Config {
             );
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_config() -> Config {
+        Config::from_toml(include_str!("../integration/server.toml")).unwrap()
+    }
+
+    #[test]
+    fn share_config_accepts_legacy_ipv4_only_files() {
+        let mut config = base_config();
+        config.share = Some(ShareConfig {
+            server: "198.51.100.10".to_owned(),
+            ipv6_server: String::new(),
+            port: 443,
+            sni: "example.com".to_owned(),
+            insecure: false,
+        });
+        let encoded = config.to_toml().unwrap();
+        assert!(encoded.contains("server = \"198.51.100.10\""));
+        assert!(!encoded.contains("ipv6_server"));
+        assert_eq!(
+            Config::from_toml(&encoded)
+                .unwrap()
+                .share
+                .unwrap()
+                .ipv6_server,
+            ""
+        );
+    }
+
+    #[test]
+    fn share_config_allows_an_ipv6_only_endpoint() {
+        let mut config = base_config();
+        config.share = Some(ShareConfig {
+            server: String::new(),
+            ipv6_server: "2001:db8::10".to_owned(),
+            port: 443,
+            sni: "example.com".to_owned(),
+            insecure: false,
+        });
+        assert!(config.validate().is_ok());
+        assert!(config.to_toml().unwrap().contains("2001:db8::10"));
     }
 }

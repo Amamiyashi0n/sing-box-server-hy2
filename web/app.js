@@ -189,7 +189,8 @@ async function loadConfig() {
   $("#listen").value = config.listen || "";
   $("#certificate").value = config.tls?.certificate || "";
   $("#private-key").value = config.tls?.private_key || "";
-  $("#share-server").value = config.share?.server || "";
+  $("#share-ipv4-server").value = config.share?.server || "";
+  $("#share-ipv6-server").value = config.share?.ipv6_server || "";
   $("#share-port").value = config.share?.port ?? listenPort(config.listen) ?? 443;
   $("#share-sni").value = config.share?.sni || "";
   $("#share-insecure").checked = Boolean(config.share?.insecure);
@@ -340,8 +341,7 @@ function shareHost(value) {
   return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
 }
 
-function buildShareLink(user) {
-  const server = $("#share-server").value.trim();
+function buildShareLink(user, server) {
   const port = Number($("#share-port").value);
   if (!server || !port || !user.password) return "";
   const query = new URLSearchParams();
@@ -358,9 +358,15 @@ function buildShareLink(user) {
 }
 
 function currentShareLinks() {
-  return collectUsers(false)
-    .map(user => ({ user, link: buildShareLink(user) }))
-    .filter(item => item.link);
+  const servers = [
+    { family: "IPv4", server: $("#share-ipv4-server").value.trim() },
+    { family: "IPv6", server: $("#share-ipv6-server").value.trim() }
+  ].filter(item => item.server);
+  return collectUsers(false).flatMap(user => servers.map(({ family, server }) => ({
+    user,
+    family,
+    link: buildShareLink(user, server)
+  }))).filter(item => item.link);
 }
 
 function renderShareLinks() {
@@ -368,8 +374,8 @@ function renderShareLinks() {
   if (!target) return;
   const links = currentShareLinks();
   $("#link-count").textContent = `${links.length} 个链接`;
-  if (!$("#share-server").value.trim()) {
-    target.innerHTML = '<div class="empty">填写公网服务器后生成链接</div>';
+  if (!$("#share-ipv4-server").value.trim() && !$("#share-ipv6-server").value.trim()) {
+    target.innerHTML = '<div class="empty">填写 IPv4 或 IPv6 公网地址后生成链接</div>';
     return;
   }
   if (!links.length) {
@@ -383,13 +389,13 @@ function renderShareLinks() {
         <div class="share-protocol-name">HY2</div>
         <div class="share-link-fields">
           <div class="share-link-line">
-            <span>连接</span>
-            <input aria-label="${escapeHtml(item.user.name || "用户")} HY2 连接" readonly value="${escapeHtml(item.link)}">
+            <span>${item.family} 连接</span>
+            <input aria-label="${escapeHtml(item.user.name || "用户")} HY2 ${item.family} 连接" readonly value="${escapeHtml(item.link)}">
             <button class="button secondary compact" data-copy-link="${index}" data-link-kind="source" type="button">复制</button>
           </div>
           <div class="share-link-line">
-            <span>短链接</span>
-            <input aria-label="${escapeHtml(item.user.name || "用户")} HY2 短链接" readonly
+            <span>${item.family} 订阅</span>
+            <input aria-label="${escapeHtml(item.user.name || "用户")} HY2 ${item.family} 订阅" readonly
               value="${escapeHtml(state.shareShortLinks.get(item.link) || "")}"
               placeholder="${state.shareShortLinksPending.has(item.link) ? "正在生成" : escapeHtml(state.shareShortLinkErrors.get(item.link) || "保存后生成")}">
             <button class="button secondary compact" data-copy-link="${index}" data-link-kind="short" type="button" ${state.shareShortLinks.has(item.link) ? "" : "disabled"}>复制</button>
@@ -562,7 +568,8 @@ function collectMasquerade() {
 
 function collectConfig() {
   const obfsEnabled = $("#obfs-enabled").checked;
-  const shareServer = $("#share-server").value.trim();
+  const shareIpv4Server = $("#share-ipv4-server").value.trim();
+  const shareIpv6Server = $("#share-ipv6-server").value.trim();
   return {
     listen: $("#listen").value.trim(),
     tls: { certificate: $("#certificate").value.trim(), private_key: $("#private-key").value.trim() },
@@ -575,8 +582,9 @@ function collectConfig() {
     udp: { enabled: $("#udp-enabled").checked, timeout_secs: Number($("#udp-timeout").value) },
     obfs: obfsEnabled ? { type: "salamander", password: $("#obfs-password").value } : null,
     masquerade: collectMasquerade(),
-    share: shareServer ? {
-      server: shareServer,
+    share: shareIpv4Server || shareIpv6Server ? {
+      server: shareIpv4Server,
+      ipv6_server: shareIpv6Server,
       port: Number($("#share-port").value),
       sni: $("#share-sni").value.trim(),
       insecure: $("#share-insecure").checked

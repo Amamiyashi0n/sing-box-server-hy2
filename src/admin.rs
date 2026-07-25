@@ -179,7 +179,13 @@ pub async fn run(
                 config
                     .share
                     .as_ref()
-                    .map(|share| format!("{}:{}", share.server, share.port))
+                    .map(|share| {
+                        if share.server.trim().is_empty() {
+                            format!("[{}]:{}", share.ipv6_server, share.port)
+                        } else {
+                            format!("{}:{}", share.server, share.port)
+                        }
+                    })
                     .unwrap_or_else(|| config.listen.to_string()),
             );
             runtime.users = config.users.len();
