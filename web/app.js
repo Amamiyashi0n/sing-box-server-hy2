@@ -10,15 +10,11 @@ const state = {
   shareShortLinksPending: new Set(),
   converter: {
     source: localStorage.getItem("sublink-source") || "",
-    format: localStorage.getItem("sublink-format") || "singbox",
     links: null,
     busy: false
   }
 };
 
-const CONVERTER_FORMATS = ["singbox", "clash", "surge", "xray"];
-const CONVERTER_LABELS = { singbox: "Sing-Box", clash: "Clash", surge: "Surge", xray: "Xray" };
-const CONVERTER_PREFIXES = { singbox: "b", clash: "c", surge: "s", xray: "x" };
 const PAGE_TITLES = {
   overview: "概览",
   service: "服务配置",
@@ -457,11 +453,6 @@ function renderConverter() {
   const bytes = new TextEncoder().encode(source).length;
   $("#converter-stats").textContent = `${lines} 行 / ${bytes} B`;
   $("#converter-source").value = source;
-  document.querySelectorAll("[data-converter-format]").forEach(button => {
-    const active = button.dataset.converterFormat === state.converter.format;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-selected", String(active));
-  });
   $("#converter-generate").disabled = state.converter.busy;
   $("#converter-generate").textContent = state.converter.busy ? "生成中" : "生成订阅";
   renderConverterResults();
@@ -473,10 +464,6 @@ function setConverterStatus(message = "", error = false) {
   target.classList.toggle("error", error);
 }
 
-function orderedConverterFormats() {
-  return [state.converter.format, ...CONVERTER_FORMATS.filter(format => format !== state.converter.format)];
-}
-
 function renderConverterResults() {
   const target = $("#converter-results");
   const links = state.converter.links;
@@ -485,16 +472,16 @@ function renderConverterResults() {
     target.replaceChildren();
     return;
   }
-  target.innerHTML = orderedConverterFormats().map(format => `
-    <div class="converter-result ${format === state.converter.format ? "preferred" : ""}">
-      <strong>${CONVERTER_LABELS[format]}</strong>
-      <input aria-label="${CONVERTER_LABELS[format]} 订阅地址" readonly value="${escapeHtml(links[format])}">
-      <button class="button secondary compact" data-converter-copy="${format}" type="button">复制</button>
-      <a class="button secondary compact converter-open" href="${escapeHtml(links[format])}" target="_blank" rel="noreferrer">打开</a>
-    </div>`).join("");
+  target.innerHTML = `
+    <div class="converter-result preferred">
+      <strong>自动匹配</strong>
+      <input aria-label="通用订阅地址" readonly value="${escapeHtml(links)}">
+      <button class="button secondary compact" data-converter-copy type="button">复制</button>
+      <a class="button secondary compact converter-open" href="${escapeHtml(links)}" target="_blank" rel="noreferrer">打开</a>
+    </div>`;
   target.querySelectorAll("[data-converter-copy]").forEach(button => button.addEventListener("click", async () => {
     try {
-      await copyText(links[button.dataset.converterCopy]);
+      await copyText(links);
       setConverterStatus("订阅地址已复制");
     } catch {
       setConverterStatus("无法写入剪贴板", true);
@@ -516,18 +503,15 @@ async function generateConverterLinks() {
   renderConverter();
   setConverterStatus();
   try {
-    const pairs = await Promise.all(CONVERTER_FORMATS.map(async format => {
-      const longUrl = new URL(`/${format}`, window.location.origin);
-      longUrl.searchParams.set("config", source);
-      const shorten = new URL("/shorten-v2", window.location.origin);
-      shorten.searchParams.set("url", longUrl.toString());
-      const response = await fetch(shorten);
-      if (!response.ok) throw new Error(await response.text() || "短链接生成失败");
-      const code = (await response.text()).trim();
-      return [format, `${window.location.origin}/${CONVERTER_PREFIXES[format]}/${encodeURIComponent(code)}`];
-    }));
-    state.converter.links = Object.fromEntries(pairs);
-    setConverterStatus("已生成 4 个客户端订阅地址");
+    const longUrl = new URL("/xray", window.location.origin);
+    longUrl.searchParams.set("config", source);
+    const shorten = new URL("/shorten-auto", window.location.origin);
+    shorten.searchParams.set("url", longUrl.toString());
+    const response = await fetch(shorten);
+    if (!response.ok) throw new Error(await response.text() || "短链接生成失败");
+    const code = (await response.text()).trim();
+    state.converter.links = `${window.location.origin}/sub/${encodeURIComponent(code)}`;
+    setConverterStatus("已生成通用订阅地址");
   } catch (error) {
     state.converter.links = null;
     setConverterStatus(error.message || "订阅生成失败", true);
@@ -639,11 +623,6 @@ function bindEvents() {
     renderConverter();
     setConverterStatus();
   });
-  document.querySelectorAll("[data-converter-format]").forEach(button => button.addEventListener("click", () => {
-    state.converter.format = button.dataset.converterFormat;
-    localStorage.setItem("sublink-format", state.converter.format);
-    renderConverter();
-  }));
   $("#converter-generate").addEventListener("click", generateConverterLinks);
   $("#converter-clear").addEventListener("click", () => {
     state.converter.source = "";

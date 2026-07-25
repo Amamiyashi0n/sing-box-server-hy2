@@ -295,6 +295,27 @@ impl SublinkService {
         Ok(code)
     }
 
+    pub async fn shorten_auto(&self, raw_url: &str) -> Result<String> {
+        let url = Url::parse(raw_url).map_err(|_| anyhow!("invalid URL parameter"))?;
+        ensure!(
+            FORMATS
+                .iter()
+                .any(|format| url.path() == format!("/{format}")),
+            "invalid URL parameter"
+        );
+        let query = url
+            .query()
+            .filter(|query| !query.is_empty())
+            .ok_or_else(|| anyhow!("invalid URL parameter"))?;
+        ensure!(query.len() <= MAX_INPUT_BYTES, "URL parameter is too large");
+        let code = random_code()?;
+        self.store
+            .lock()
+            .await
+            .put(code.clone(), format!("?{query}"))?;
+        Ok(code)
+    }
+
     pub async fn redirect(&self, prefix: &str, code: &str) -> Result<String> {
         let format = format_for_prefix(prefix).ok_or_else(|| anyhow!("invalid short URL"))?;
         ensure!(valid_code(code), "invalid short URL");
@@ -318,7 +339,6 @@ impl SublinkService {
         let url = Url::parse(&format!("https://short.local/xray{query}"))
             .map_err(|_| anyhow!("invalid short URL"))?;
         let config = query_value(&url, &["config"]);
-        ensure!(config.starts_with("hysteria2://"), "invalid HY2 short URL");
         self.convert(auto_format(user_agent, accept), &config)
     }
 

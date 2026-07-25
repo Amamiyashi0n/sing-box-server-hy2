@@ -138,7 +138,7 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.5; }
 .converter-format { min-height: 32px; padding: 0 11px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; }
 .converter-format:hover { color: var(--text); }
 .converter-format.active { background: #3b3b3b; color: var(--text); }
-.converter-actions { display: flex; align-items: center; gap: 7px; }
+.converter-actions { display: flex; align-items: center; gap: 7px; margin-left: auto; }
 .converter-status { min-height: 18px; margin: 12px 0 0; color: var(--subtle); font-size: 12px; }
 .converter-status.error { color: var(--red); }
 .converter-results { display: grid; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line-soft); }

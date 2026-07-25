@@ -269,6 +269,7 @@ fn router(state: AdminState) -> Router {
         .route("/surge", get(sublink_surge))
         .route("/xray", get(sublink_xray))
         .route("/shorten-v2", get(sublink_shorten))
+        .route("/shorten-auto", get(sublink_shorten_auto))
         .route("/shorten-hy2", get(sublink_shorten_hy2))
         .route("/sub/{code}", get(sublink_auto))
         .route("/resolve", get(sublink_resolve))
@@ -557,6 +558,19 @@ async fn sublink_shorten_hy2(
         return sublink_error(StatusCode::BAD_REQUEST, "missing URL parameter");
     };
     match state.sublink.shorten_hy2(&url).await {
+        Ok(code) => ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], code).into_response(),
+        Err(error) => sublink_error(sublink_status(&error), error),
+    }
+}
+
+async fn sublink_shorten_auto(
+    State(state): State<AdminState>,
+    OriginalUri(uri): OriginalUri,
+) -> Response {
+    let Some(url) = uri_parameter(&uri, "url") else {
+        return sublink_error(StatusCode::BAD_REQUEST, "missing URL parameter");
+    };
+    match state.sublink.shorten_auto(&url).await {
         Ok(code) => ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], code).into_response(),
         Err(error) => sublink_error(sublink_status(&error), error),
     }
