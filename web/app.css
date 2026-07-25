@@ -133,6 +133,7 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.5; }
 .admin-user-name strong { overflow: hidden; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .current-user { padding: 3px 6px; border-radius: 4px; background: #3b3b3b; color: var(--muted); font-size: 10px; white-space: nowrap; }
 .converter-source { min-height: 190px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; line-height: 1.65; }
+.converter-rules { margin-top: 14px; }
 .converter-tools { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 14px; }
 .converter-formats { display: grid; grid-template-columns: repeat(4, minmax(84px, 1fr)); gap: 5px; padding: 4px; border-radius: 7px; background: var(--surface); }
 .converter-format { min-height: 32px; padding: 0 11px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; }

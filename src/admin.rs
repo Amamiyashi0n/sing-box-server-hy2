@@ -522,7 +522,13 @@ fn sublink_convert(
     let Some(input) = uri_parameter(&uri, "config") else {
         return sublink_error(StatusCode::BAD_REQUEST, "missing config parameter");
     };
-    match state.sublink.convert(format, &input) {
+    let selected_rules = uri_parameter(&uri, "selectedRules");
+    let ad_block = uri_parameter(&uri, "adblock")
+        .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+    match state
+        .sublink
+        .convert_with_rules(format, &input, selected_rules.as_deref(), ad_block)
+    {
         Ok(output) => (
             [
                 (header::CONTENT_TYPE, output.content_type),

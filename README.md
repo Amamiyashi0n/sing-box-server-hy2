@@ -82,6 +82,12 @@ The public client routes are `/singbox`, `/clash`, `/surge`, `/xray`,
 `/shorten-v2`, `/resolve`, and `/{b,c,s,x}/<code>`. Remote HTTP(S)
 subscription fetching is intentionally disabled.
 
+The converter also implements the upstream Sublink Worker rule presets:
+`minimal`, `balanced`, and `comprehensive`, plus an independent ad-block
+option. Adaptive short links retain the selected preset and emit native remote
+rule sets for Sing-Box, Clash/Mihomo, and Surge. Xray output remains a Base64
+node subscription because that format has no routing-policy container.
+
 The conversion behavior was rewritten in Rust from the MIT-licensed
 `Amamiyashi0n/sublink-worker-c` implementation; no C code, darkhttpd process,
 or secondary HTTP port is included.

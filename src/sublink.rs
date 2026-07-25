@@ -25,6 +25,151 @@ const MAX_NESTING: usize = 2;
 const DEFAULT_SHORT_LINKS: usize = 512;
 const DEFAULT_SHORT_TTL: Duration = Duration::from_secs(86_400);
 const FORMATS: [&str; 4] = ["singbox", "clash", "surge", "xray"];
+const SITE_RULE_BASE: &str = "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/";
+const IP_RULE_BASE: &str = "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geoip/";
+const SINGBOX_SITE_RULE_BASE: &str = "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/sing/geo/geosite/";
+const SINGBOX_IP_RULE_BASE: &str = "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/sing/geo/geoip/";
+const SURGE_SITE_RULE_BASE: &str = "https://gh-proxy.com/https://github.com/NSZA156/surge-geox-rules/raw/refs/heads/release/geo/geosite/";
+const SURGE_IP_RULE_BASE: &str = "https://gh-proxy.com/https://github.com/NSZA156/surge-geox-rules/raw/refs/heads/release/geo/geoip/";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RulePreset {
+    Minimal,
+    Balanced,
+    Comprehensive,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuleAction {
+    Proxy,
+    Direct,
+    Reject,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RuleSpec {
+    name: &'static str,
+    sites: &'static [&'static str],
+    ips: &'static [&'static str],
+    action: RuleAction,
+}
+
+const RULES: &[RuleSpec] = &[
+    RuleSpec {
+        name: "Ad Block",
+        sites: &["category-ads-all"],
+        ips: &[],
+        action: RuleAction::Reject,
+    },
+    RuleSpec {
+        name: "AI Services",
+        sites: &["category-ai-!cn"],
+        ips: &[],
+        action: RuleAction::Proxy,
+    },
+    RuleSpec {
+        name: "Bilibili",
+        sites: &["bilibili"],
+        ips: &[],
+        action: RuleAction::Proxy,
+    },
+    RuleSpec {
+        name: "Youtube",
+        sites: &["youtube"],
+        ips: &[],
+        action: RuleAction::Proxy,
+    },
+    RuleSpec {
+        name: "Google",
+        sites: &["google"],
+        ips: &["google"],
+        action: RuleAction::Proxy,
+    },
+    RuleSpec {
+        name: "Private",
+        sites: &[],
+        ips: &["private"],
+        action: RuleAction::Direct,
+    },
+    RuleSpec {
+        name: "Location:CN",
+        sites: &["geolocation-cn", "cn"],
+        ips: &["cn"],
+        action: RuleAction::Direct,
+    },
+    RuleSpec {
+        name: "Telegram",
+        sites: &[],
+        ips: &["telegram"],
+        action: RuleAction::Proxy,
+    },
+    RuleSpec {
+        name: "Github",
+        sites: &["github", "gitlab"],
+        ips: &[],
+        action: RuleAction::Proxy,
+    },
+    RuleSpec {
+        name: "Microsoft",
+        sites: &["microsoft"],
+        ips: &[],
+        action: RuleAction::Proxy,
+    },
+    RuleSpec {
+        name: "Apple",
+        sites: &["apple"],
+        ips: &[],
+        action: RuleAction::Proxy,
+    },
+    RuleSpec {
+        name: "Social Media",
+        sites: &["facebook", "instagram", "twitter", "tiktok", "linkedin"],
+        ips: &[],
+        action: RuleAction::Proxy,
+    },
+    RuleSpec {
+        name: "Streaming",
+        sites: &["netflix", "hulu", "disney", "hbo", "amazon", "bahamut"],
+        ips: &[],
+        action: RuleAction::Proxy,
+    },
+    RuleSpec {
+        name: "Gaming",
+        sites: &["steam", "epicgames", "ea", "ubisoft", "blizzard"],
+        ips: &[],
+        action: RuleAction::Proxy,
+    },
+    RuleSpec {
+        name: "Education",
+        sites: &[
+            "coursera",
+            "edx",
+            "udemy",
+            "khanacademy",
+            "category-scholar-!cn",
+        ],
+        ips: &[],
+        action: RuleAction::Proxy,
+    },
+    RuleSpec {
+        name: "Financial",
+        sites: &["paypal", "visa", "mastercard", "stripe", "wise"],
+        ips: &[],
+        action: RuleAction::Proxy,
+    },
+    RuleSpec {
+        name: "Cloud Services",
+        sites: &["aws", "azure", "digitalocean", "heroku", "dropbox"],
+        ips: &[],
+        action: RuleAction::Proxy,
+    },
+    RuleSpec {
+        name: "Non-China",
+        sites: &["geolocation-!cn"],
+        ips: &[],
+        action: RuleAction::Proxy,
+    },
+];
 
 #[derive(Debug, Clone)]
 struct Node {
@@ -215,19 +360,31 @@ impl SublinkService {
     }
 
     pub fn convert(&self, format: &str, input: &str) -> Result<SublinkOutput> {
+        self.convert_with_rules(format, input, None, false)
+    }
+
+    pub fn convert_with_rules(
+        &self,
+        format: &str,
+        input: &str,
+        selected_rules: Option<&str>,
+        ad_block: bool,
+    ) -> Result<SublinkOutput> {
         let nodes = parse_input(input)?;
+        let preset = selected_rules.map(parse_rule_preset).transpose()?;
+        let rules = selected_rule_specs(preset, ad_block);
         match format {
             "singbox" => Ok(SublinkOutput::new(
                 "application/json; charset=utf-8",
-                render_singbox(&nodes)?,
+                render_singbox(&nodes, &rules)?,
             )),
             "clash" => Ok(SublinkOutput::new(
                 "text/yaml; charset=utf-8",
-                render_clash(&nodes),
+                render_clash(&nodes, &rules),
             )),
             "surge" => Ok(SublinkOutput::new(
                 "text/plain; charset=utf-8",
-                render_surge(&nodes),
+                render_surge(&nodes, &rules),
             )),
             "xray" => Ok(SublinkOutput::new(
                 "text/plain; charset=utf-8",
@@ -307,26 +464,25 @@ impl SublinkService {
                 .any(|format| url.path() == format!("/{format}")),
             "invalid URL parameter"
         );
-        let raw_config = raw_url
-            .split_once("?config=")
-            .map(|(_, value)| value)
-            .ok_or_else(|| anyhow!("invalid URL parameter"))?;
-        let config = percent_decode_str(raw_config)
-            .decode_utf8()
-            .map_err(|_| anyhow!("invalid URL parameter"))?
-            .into_owned();
+        let config = query_value(&url, &["config"]);
         ensure!(!config.is_empty(), "invalid URL parameter");
         ensure!(
             config.len() <= MAX_INPUT_BYTES,
             "URL parameter is too large"
         );
-        let encoded_config =
-            url::form_urlencoded::byte_serialize(config.as_bytes()).collect::<String>();
+        if let Some(selected_rules) = query_value_optional(&url, &["selectedRules"]) {
+            parse_rule_preset(&selected_rules)?;
+        }
+        let query = url
+            .query()
+            .filter(|query| !query.is_empty())
+            .ok_or_else(|| anyhow!("invalid URL parameter"))?;
+        ensure!(query.len() <= MAX_INPUT_BYTES, "URL parameter is too large");
         let code = random_code()?;
         self.store
             .lock()
             .await
-            .put(code.clone(), format!("?config={encoded_config}"))?;
+            .put(code.clone(), format!("?{query}"))?;
         Ok(code)
     }
 
@@ -353,7 +509,14 @@ impl SublinkService {
         let url = Url::parse(&format!("https://short.local/xray{query}"))
             .map_err(|_| anyhow!("invalid short URL"))?;
         let config = query_value(&url, &["config"]);
-        self.convert(auto_format(user_agent, accept), &config)
+        let selected_rules = query_value_optional(&url, &["selectedRules"]);
+        let ad_block = query_bool(&url, &["adblock"]);
+        self.convert_with_rules(
+            auto_format(user_agent, accept),
+            &config,
+            selected_rules.as_deref(),
+            ad_block,
+        )
     }
 
     pub async fn resolve(&self, raw_url: &str) -> Result<String> {
@@ -395,10 +558,55 @@ fn decode_component(value: &str) -> String {
 }
 
 fn query_value(url: &Url, names: &[&str]) -> String {
+    query_value_optional(url, names).unwrap_or_default()
+}
+
+fn query_value_optional(url: &Url, names: &[&str]) -> Option<String> {
     url.query_pairs()
         .find(|(key, _)| names.iter().any(|name| key.eq_ignore_ascii_case(name)))
         .map(|(_, value)| value.into_owned())
-        .unwrap_or_default()
+}
+
+fn query_bool(url: &Url, names: &[&str]) -> bool {
+    query_value(url, names).trim().eq_ignore_ascii_case("true")
+        || query_value(url, names).trim() == "1"
+}
+
+fn parse_rule_preset(value: &str) -> Result<RulePreset> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "minimal" => Ok(RulePreset::Minimal),
+        "balanced" => Ok(RulePreset::Balanced),
+        "comprehensive" => Ok(RulePreset::Comprehensive),
+        _ => bail!("invalid selectedRules preset"),
+    }
+}
+
+fn selected_rule_specs(preset: Option<RulePreset>, ad_block: bool) -> Vec<&'static RuleSpec> {
+    let mut selected = Vec::new();
+    for rule in RULES {
+        let included = match preset {
+            None => false,
+            Some(RulePreset::Minimal) => {
+                matches!(rule.name, "Location:CN" | "Private" | "Non-China")
+            }
+            Some(RulePreset::Balanced) => matches!(
+                rule.name,
+                "Location:CN"
+                    | "Private"
+                    | "Non-China"
+                    | "Github"
+                    | "Google"
+                    | "Youtube"
+                    | "AI Services"
+                    | "Telegram"
+            ),
+            Some(RulePreset::Comprehensive) => true,
+        };
+        if included || ad_block && rule.name == "Ad Block" {
+            selected.push(rule);
+        }
+    }
+    selected
 }
 
 fn parse_input(input: &str) -> Result<Vec<Node>> {
@@ -650,7 +858,7 @@ fn parse_vmess(uri: &str) -> Result<Node> {
     Ok(node)
 }
 
-fn render_singbox(nodes: &[Node]) -> Result<String> {
+fn render_singbox(nodes: &[Node], selected_rules: &[&RuleSpec]) -> Result<String> {
     let mut outbounds = nodes.iter().map(singbox_node).collect::<Vec<_>>();
     outbounds.push(json!({
         "type": "selector",
@@ -658,12 +866,51 @@ fn render_singbox(nodes: &[Node]) -> Result<String> {
         "outbounds": nodes.iter().map(|node| node.name.clone()).collect::<Vec<_>>()
     }));
     outbounds.push(json!({ "type": "direct", "tag": "DIRECT" }));
+    let mut route_rules = Vec::new();
+    let mut rule_sets = Vec::new();
+    for rule in selected_rules {
+        let mut tags = Vec::new();
+        for site in rule.sites {
+            tags.push((*site).to_owned());
+            rule_sets.push(json!({
+                "type": "remote",
+                "tag": site,
+                "format": "binary",
+                "url": format!("{SINGBOX_SITE_RULE_BASE}{site}.srs"),
+                "download_detour": "DIRECT"
+            }));
+        }
+        for ip in rule.ips {
+            let tag = format!("{ip}-ip");
+            tags.push(tag.clone());
+            rule_sets.push(json!({
+                "type": "remote",
+                "tag": tag,
+                "format": "binary",
+                "url": format!("{SINGBOX_IP_RULE_BASE}{ip}.srs"),
+                "download_detour": "DIRECT"
+            }));
+        }
+        let mut route_rule = serde_json::Map::from_iter([("rule_set".to_owned(), json!(tags))]);
+        match rule.action {
+            RuleAction::Proxy => {
+                route_rule.insert("outbound".to_owned(), json!("PROXY"));
+            }
+            RuleAction::Direct => {
+                route_rule.insert("outbound".to_owned(), json!("DIRECT"));
+            }
+            RuleAction::Reject => {
+                route_rule.insert("action".to_owned(), json!("reject"));
+            }
+        }
+        route_rules.push(Value::Object(route_rule));
+    }
     Ok(serde_json::to_string(&json!({
         "log": { "level": "warn" },
         "dns": { "servers": [{ "type": "udp", "tag": "dns", "server": "223.5.5.5" }], "final": "dns" },
         "inbounds": [],
         "outbounds": outbounds,
-        "route": { "final": "PROXY" }
+        "route": { "rules": route_rules, "rule_set": rule_sets, "final": "PROXY" }
     }))?)
 }
 
@@ -728,7 +975,7 @@ fn singbox_node(node: &Node) -> Value {
     Value::Object(output)
 }
 
-fn render_clash(nodes: &[Node]) -> String {
+fn render_clash(nodes: &[Node], selected_rules: &[&RuleSpec]) -> String {
     let mut output = String::from(
         "mixed-port: 7890\nmode: rule\nallow-lan: false\nlog-level: warning\nproxies:\n",
     );
@@ -791,7 +1038,39 @@ fn render_clash(nodes: &[Node]) -> String {
     for node in nodes {
         let _ = writeln!(output, "      - {}", yaml_quote(&node.name));
     }
-    output.push_str("      - DIRECT\nrules:\n  - MATCH,PROXY\n");
+    output.push_str("      - DIRECT\n");
+    if !selected_rules.is_empty() {
+        output.push_str("rule-providers:\n");
+        for rule in selected_rules {
+            for site in rule.sites {
+                let _ = writeln!(
+                    output,
+                    "  {site}:\n    type: http\n    behavior: domain\n    format: mrs\n    url: {}\n    path: {}\n    interval: 86400",
+                    yaml_quote(&format!("{SITE_RULE_BASE}{site}.mrs")),
+                    yaml_quote(&format!("./ruleset/{site}.mrs"))
+                );
+            }
+            for ip in rule.ips {
+                let _ = writeln!(
+                    output,
+                    "  {ip}-ip:\n    type: http\n    behavior: ipcidr\n    format: mrs\n    url: {}\n    path: {}\n    interval: 86400",
+                    yaml_quote(&format!("{IP_RULE_BASE}{ip}.mrs")),
+                    yaml_quote(&format!("./ruleset/{ip}-ip.mrs"))
+                );
+            }
+        }
+    }
+    output.push_str("rules:\n");
+    for rule in selected_rules {
+        let policy = rule_policy(rule.action);
+        for site in rule.sites {
+            let _ = writeln!(output, "  - RULE-SET,{site},{policy}");
+        }
+        for ip in rule.ips {
+            let _ = writeln!(output, "  - RULE-SET,{ip}-ip,{policy},no-resolve");
+        }
+    }
+    output.push_str("  - MATCH,PROXY\n");
     output
 }
 
@@ -803,7 +1082,7 @@ fn yaml_field(output: &mut String, key: &str, value: &str) {
     let _ = writeln!(output, "    {key}: {}", yaml_quote(value));
 }
 
-fn render_surge(nodes: &[Node]) -> String {
+fn render_surge(nodes: &[Node], selected_rules: &[&RuleSpec]) -> String {
     let mut output = String::from("[General]\nloglevel = notify\n\n[Proxy]\n");
     for node in nodes {
         let kind = if node.kind == "shadowsocks" {
@@ -851,8 +1130,32 @@ fn render_surge(nodes: &[Node]) -> String {
             .collect::<Vec<_>>()
             .join(","),
     );
-    output.push_str(",DIRECT\n\n[Rule]\nFINAL,PROXY\n");
+    output.push_str(",DIRECT\n\n[Rule]\n");
+    for rule in selected_rules {
+        let policy = rule_policy(rule.action);
+        for site in rule.sites {
+            let _ = writeln!(
+                output,
+                "RULE-SET,{SURGE_SITE_RULE_BASE}{site}.conf,{policy}"
+            );
+        }
+        for ip in rule.ips {
+            let _ = writeln!(
+                output,
+                "RULE-SET,{SURGE_IP_RULE_BASE}{ip}.txt,{policy},no-resolve"
+            );
+        }
+    }
+    output.push_str("FINAL,PROXY\n");
     output
+}
+
+fn rule_policy(action: RuleAction) -> &'static str {
+    match action {
+        RuleAction::Proxy => "PROXY",
+        RuleAction::Direct => "DIRECT",
+        RuleAction::Reject => "REJECT",
+    }
 }
 
 fn surge_value(value: &str) -> String {
@@ -1091,6 +1394,48 @@ mod tests {
 
         assert_eq!(adaptive.content_type, direct.content_type);
         assert_eq!(adaptive.body, direct.body);
+    }
+
+    #[test]
+    fn original_rule_presets_generate_client_rule_sets() {
+        let service = SublinkService::default();
+        let minimal = service
+            .convert_with_rules("clash", VLESS, Some("minimal"), true)
+            .unwrap()
+            .body;
+        assert!(minimal.contains("category-ads-all.mrs"));
+        assert!(minimal.contains("RULE-SET,category-ads-all,REJECT"));
+        assert!(minimal.contains("RULE-SET,cn-ip,DIRECT,no-resolve"));
+        assert!(!minimal.contains("youtube.mrs"));
+
+        let balanced = service
+            .convert_with_rules("singbox", VLESS, Some("balanced"), false)
+            .unwrap()
+            .body;
+        assert!(balanced.contains("youtube.srs"));
+        assert!(balanced.contains("geolocation-!cn.srs"));
+        assert!(!balanced.contains("category-ads-all.srs"));
+
+        let comprehensive = service
+            .convert_with_rules("surge", VLESS, Some("comprehensive"), false)
+            .unwrap()
+            .body;
+        assert!(comprehensive.contains("category-ads-all.conf,REJECT"));
+        assert!(comprehensive.contains("netflix.conf,PROXY"));
+    }
+
+    #[tokio::test]
+    async fn adaptive_links_preserve_rule_preset_and_ad_block() {
+        let service = SublinkService::default();
+        let raw = format!(
+            "https://example.com/xray?config={}&selectedRules=minimal&adblock=true",
+            url::form_urlencoded::byte_serialize(VLESS.as_bytes()).collect::<String>()
+        );
+        let code = service.shorten_auto(&raw).await.unwrap();
+        let body = service.auto(&code, "mihomo/1.19", "").await.unwrap().body;
+        assert!(body.contains("category-ads-all.mrs"));
+        assert!(body.contains("geolocation-!cn.mrs"));
+        assert!(!body.contains("youtube.mrs"));
     }
 
     #[tokio::test]

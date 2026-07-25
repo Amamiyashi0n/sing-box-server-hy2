@@ -172,6 +172,20 @@
           <span>节点或 Base64 订阅</span>
           <textarea class="converter-source" id="converter-source" spellcheck="false" placeholder="粘贴 SS、VMess、VLESS、Trojan、Hysteria2、TUIC 或 AnyTLS 链接"></textarea>
         </label>
+        <div class="field-grid two converter-rules">
+          <label class="field">
+            <span>规则预设</span>
+            <select id="converter-rule-preset">
+              <option value="minimal">简易</option>
+              <option value="balanced">均衡</option>
+              <option value="comprehensive">全面（包含广告拦截）</option>
+            </select>
+          </label>
+          <label class="toggle-field">
+            <span>广告拦截</span>
+            <span class="switch"><input id="converter-adblock" type="checkbox"><span></span></span>
+          </label>
+        </div>
         <div class="converter-tools">
           <div class="converter-actions">
             <button class="button secondary compact" id="converter-paste" type="button">粘贴</button>

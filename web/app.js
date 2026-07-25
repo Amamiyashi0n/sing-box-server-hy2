@@ -10,6 +10,8 @@ const state = {
   shareShortLinksPending: new Set(),
   converter: {
     source: localStorage.getItem("sublink-source") || "",
+    rulePreset: localStorage.getItem("sublink-rule-preset") || "balanced",
+    adBlock: localStorage.getItem("sublink-adblock") === "true",
     links: null,
     busy: false
   }
@@ -453,6 +455,9 @@ function renderConverter() {
   const bytes = new TextEncoder().encode(source).length;
   $("#converter-stats").textContent = `${lines} 行 / ${bytes} B`;
   $("#converter-source").value = source;
+  $("#converter-rule-preset").value = state.converter.rulePreset;
+  $("#converter-adblock").checked = state.converter.adBlock || state.converter.rulePreset === "comprehensive";
+  $("#converter-adblock").disabled = state.converter.rulePreset === "comprehensive";
   $("#converter-generate").disabled = state.converter.busy;
   $("#converter-generate").textContent = state.converter.busy ? "生成中" : "生成订阅";
   renderConverterResults();
@@ -505,6 +510,10 @@ async function generateConverterLinks() {
   try {
     const longUrl = new URL("/xray", window.location.origin);
     longUrl.searchParams.set("config", source);
+    longUrl.searchParams.set("selectedRules", state.converter.rulePreset);
+    if (state.converter.adBlock && state.converter.rulePreset !== "comprehensive") {
+      longUrl.searchParams.set("adblock", "true");
+    }
     const shorten = new URL("/shorten-auto", window.location.origin);
     shorten.searchParams.set("url", longUrl.toString());
     const response = await fetch(shorten);
@@ -620,6 +629,20 @@ function bindEvents() {
     state.converter.source = event.target.value;
     state.converter.links = null;
     localStorage.setItem("sublink-source", state.converter.source);
+    renderConverter();
+    setConverterStatus();
+  });
+  $("#converter-rule-preset").addEventListener("change", event => {
+    state.converter.rulePreset = event.target.value;
+    state.converter.links = null;
+    localStorage.setItem("sublink-rule-preset", state.converter.rulePreset);
+    renderConverter();
+    setConverterStatus();
+  });
+  $("#converter-adblock").addEventListener("change", event => {
+    state.converter.adBlock = event.target.checked;
+    state.converter.links = null;
+    localStorage.setItem("sublink-adblock", String(state.converter.adBlock));
     renderConverter();
     setConverterStatus();
   });
