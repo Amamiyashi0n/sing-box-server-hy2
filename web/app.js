@@ -117,6 +117,28 @@ function toast(message, error = false) {
   node._timer = setTimeout(() => node.classList.remove("show"), 3200);
 }
 
+async function copyText(value) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+  } catch {
+    // HTTP pages may reject the modern clipboard API; use the selection fallback below.
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("clipboard unavailable");
+}
+
 function formatUptime(seconds) {
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
@@ -382,7 +404,7 @@ function renderShareLinks() {
     const link = button.dataset.linkKind === "short" ? state.shareShortLinks.get(source) : source;
     if (!link) return;
     try {
-      await navigator.clipboard.writeText(link);
+      await copyText(link);
       toast(button.dataset.linkKind === "short" ? "短链接已复制" : "HY2 连接已复制");
     } catch {
       toast("复制失败，请手动选择链接", true);
@@ -472,7 +494,7 @@ function renderConverterResults() {
     </div>`).join("");
   target.querySelectorAll("[data-converter-copy]").forEach(button => button.addEventListener("click", async () => {
     try {
-      await navigator.clipboard.writeText(links[button.dataset.converterCopy]);
+      await copyText(links[button.dataset.converterCopy]);
       setConverterStatus("订阅地址已复制");
     } catch {
       setConverterStatus("无法写入剪贴板", true);
