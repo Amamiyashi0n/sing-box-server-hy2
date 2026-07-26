@@ -97,11 +97,12 @@
         <section class="config-section" id="transport" aria-labelledby="transport-title">
           <div class="section-heading"><h2 id="transport-title">传输策略</h2></div>
           <div class="field-grid four">
-            <label class="field"><span>服务器上行 Mbps</span><input id="up-mbps" type="number" min="0" step="1"></label>
-            <label class="field"><span>服务器下行 Mbps</span><input id="down-mbps" type="number" min="0" step="1"></label>
+            <label class="field"><span>服务器上行 Mbps（0 = 自动）</span><input id="up-mbps" type="number" min="0" step="1" aria-describedby="bandwidth-zero-note"></label>
+            <label class="field"><span>服务器下行 Mbps（0 = 自动）</span><input id="down-mbps" type="number" min="0" step="1" aria-describedby="bandwidth-zero-note"></label>
             <label class="field"><span>UDP 会话超时 秒</span><input id="udp-timeout" type="number" min="1" step="1"></label>
             <div class="field toggle-field"><span>UDP 转发</span><label class="switch"><input id="udp-enabled" type="checkbox"><span></span></label></div>
           </div>
+          <p class="setting-note" id="bandwidth-zero-note">0 表示不设置服务器固定带宽上限，将按客户端申报值协商；客户端未申报时使用 BBR 拥塞控制。</p>
           <div class="option-row">
             <label class="check"><input id="ignore-bandwidth" type="checkbox"><span>忽略客户端带宽探测</span></label>
             <label class="check"><input id="obfs-enabled" type="checkbox"><span>启用 Salamander 混淆</span></label>

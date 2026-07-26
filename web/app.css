@@ -109,6 +109,7 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.5; }
 .switch input:checked + span { background: #777; }
 .switch input:checked + span::after { transform: translateX(18px); background: #fff; }
 .option-row { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 17px; }
+.setting-note { margin: 10px 0 0; color: var(--subtle); font-size: 11px; line-height: 1.5; }
 .check { min-height: 28px; display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; cursor: pointer; }
 .check input { width: 16px; min-height: 16px; accent-color: #d5d5d5; }
 .conditional, .share-settings { margin-top: 17px; padding-top: 17px; border-top: 1px solid var(--line-soft); }
