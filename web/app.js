@@ -211,7 +211,6 @@ async function loadStatus() {
     $("#metric-service-listen").textContent = status.service_address || status.listen || "--";
     $("#metric-webui-listen").textContent = status.webui_listen || "--";
     $("#metric-users").textContent = String(status.users);
-    $("#metric-bandwidth").textContent = `${status.up_mbps} / ${status.down_mbps} Mbps`;
     $("#metric-uptime").textContent = formatUptime(status.uptime_secs);
     $("#flag-udp").textContent = `UDP ${status.udp_enabled ? "ON" : "OFF"}`;
     $("#flag-obfs").textContent = `Salamander ${status.obfs ? "ON" : "OFF"}`;

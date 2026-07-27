@@ -81,7 +81,7 @@ h2 { font-size: 16px; font-weight: 600; }
 .section-heading > span { color: var(--subtle); font-size: 12px; }
 .heading-actions { display: flex; align-items: center; gap: 14px; }
 .heading-actions > span { color: var(--subtle); font-size: 12px; }
-.metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 22px; padding: 18px 0; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
+.metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; padding: 18px 0; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
 .metrics article { min-width: 0; }
 .metrics span, .field > span, .toggle-field > span { display: block; margin-bottom: 8px; color: var(--muted); font-size: 12px; }
 .metrics strong { display: block; overflow: hidden; color: var(--text); font-size: 15px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
