@@ -1094,8 +1094,32 @@ fn apply_auto_share_addresses(config: &mut Config) {
     if addresses.ipv4.is_none() && addresses.ipv6.is_none() {
         return;
     }
-    share.server = addresses.ipv4.map_or_else(String::new, |ip| ip.to_string());
-    share.ipv6_server = addresses.ipv6.map_or_else(String::new, |ip| ip.to_string());
+    share.server = merge_auto_ipv4_address(&share.server, addresses.ipv4);
+    share.ipv6_server = merge_auto_ipv6_address(&share.ipv6_server, addresses.ipv6);
+}
+
+fn merge_auto_ipv4_address(existing: &str, detected: Option<Ipv4Addr>) -> String {
+    let existing_public = existing
+        .parse::<Ipv4Addr>()
+        .ok()
+        .is_some_and(|address| ipv4_scope(address) == "public");
+    match detected {
+        Some(address) if ipv4_scope(address) == "public" || !existing_public => address.to_string(),
+        _ if existing_public => existing.to_owned(),
+        _ => String::new(),
+    }
+}
+
+fn merge_auto_ipv6_address(existing: &str, detected: Option<Ipv6Addr>) -> String {
+    let existing_public = existing
+        .parse::<Ipv6Addr>()
+        .ok()
+        .is_some_and(is_public_ipv6);
+    match detected {
+        Some(address) if is_public_ipv6(address) || !existing_public => address.to_string(),
+        _ if existing_public => existing.to_owned(),
+        _ => String::new(),
+    }
 }
 
 fn detect_network_addresses(listen: SocketAddr) -> NetworkAddresses {
@@ -1498,5 +1522,25 @@ mod tests {
         assert_eq!(ipv6_scope("fe80::20".parse().unwrap()), "private");
         assert!(!is_public_ipv6("2001:db8::20".parse().unwrap()));
         assert!(is_public_ipv6("2606:4700:4700::1111".parse().unwrap()));
+    }
+
+    #[test]
+    fn nat_detection_preserves_explicit_public_share_addresses() {
+        assert_eq!(
+            merge_auto_ipv4_address("23.147.56.201", Some("10.0.160.2".parse().unwrap())),
+            "23.147.56.201"
+        );
+        assert_eq!(
+            merge_auto_ipv4_address("", Some("10.0.160.2".parse().unwrap())),
+            "10.0.160.2"
+        );
+        assert_eq!(
+            merge_auto_ipv4_address("23.147.56.201", Some("8.8.8.8".parse().unwrap())),
+            "8.8.8.8"
+        );
+        assert_eq!(
+            merge_auto_ipv6_address("2606:4700:4700::1111", Some("fd00::20".parse().unwrap())),
+            "2606:4700:4700::1111"
+        );
     }
 }
