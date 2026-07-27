@@ -149,6 +149,23 @@
           <div id="masquerade-fields"></div>
         </section>
 
+        <section class="config-section" id="startup" aria-labelledby="startup-title">
+          <div class="section-heading startup-heading">
+            <h2 id="startup-title">系统启动</h2>
+            <div class="heading-actions">
+              <span id="startup-summary">检测中</span>
+              <button class="button secondary compact" id="install-startup" type="button" disabled>安装启动项</button>
+            </div>
+          </div>
+          <div class="startup-grid">
+            <div><span>系统环境</span><strong id="startup-manager">--</strong></div>
+            <div><span>开机启动</span><strong id="startup-enabled">--</strong></div>
+            <div class="startup-path"><span>服务位置</span><strong id="startup-service-path">--</strong></div>
+            <div class="startup-path"><span>程序位置</span><strong id="startup-executable-path">--</strong></div>
+            <div class="startup-path startup-wide"><span>配置位置</span><strong id="startup-config-path">--</strong></div>
+          </div>
+        </section>
+
         <div class="mobile-save">
           <button class="button primary" type="submit">保存并应用</button>
         </div>

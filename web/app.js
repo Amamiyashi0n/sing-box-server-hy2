@@ -422,6 +422,47 @@ async function loadAdminUsers() {
   renderAdminUsers();
 }
 
+function renderStartup(status) {
+  const manager = { openrc: "OpenRC", systemd: "systemd", unsupported: "不支持" }[status.manager] || status.manager || "--";
+  let summary = "未安装";
+  if (!status.supported) summary = "不支持";
+  else if (status.enabled && status.current) summary = "已启用";
+  else if (status.enabled) summary = "已启用，需要更新";
+  else if (status.installed) summary = "已安装，未启用";
+  $("#startup-summary").textContent = summary;
+  $("#startup-manager").textContent = manager;
+  $("#startup-enabled").textContent = status.enabled ? "已启用" : "未启用";
+  $("#startup-service-path").textContent = status.service_path || "--";
+  $("#startup-executable-path").textContent = status.executable_path || "--";
+  $("#startup-config-path").textContent = status.config_path || "--";
+  const button = $("#install-startup");
+  button.disabled = !status.supported;
+  button.textContent = status.installed ? "更新启动项" : "安装启动项";
+}
+
+async function loadStartup() {
+  try {
+    renderStartup(await api("/api/v1/startup"));
+  } catch (error) {
+    $("#startup-summary").textContent = "检测失败";
+    $("#install-startup").disabled = true;
+  }
+}
+
+async function installStartup() {
+  const button = $("#install-startup");
+  button.disabled = true;
+  try {
+    const status = await api("/api/v1/startup", { method: "POST" });
+    renderStartup(status);
+    toast("启动项已安装并启用");
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    if ($("#startup-summary").textContent !== "不支持") button.disabled = false;
+  }
+}
+
 function renderAdminUsers() {
   const target = $("#admin-user-list");
   $("#admin-user-count").textContent = `${state.adminUsers.length} 个账户`;
@@ -863,6 +904,7 @@ function bindEvents() {
   $("#config-form").addEventListener("submit", saveConfig);
   $("#save").addEventListener("click", saveConfig);
   $("#reload").addEventListener("click", reloadService);
+  $("#install-startup").addEventListener("click", installStartup);
   $("#add-user").addEventListener("click", addUser);
   $("#obfs-enabled").addEventListener("change", toggleObfs);
   $("#show-passwords").addEventListener("change", applyPasswordVisibility);
@@ -964,7 +1006,7 @@ function bindEvents() {
     $("#login-error").classList.add("hidden");
     try {
       await createAdminSession(username, password);
-      await Promise.all([loadConfig(), loadAdminUsers()]);
+      await Promise.all([loadConfig(), loadAdminUsers(), loadStartup()]);
       closeLoginScreen();
       await loadStatus();
       startStatusPolling();
@@ -989,7 +1031,7 @@ async function initialize() {
   activatePage(pageFromHash(), false);
   if (state.username && state.sessionExpiresAt * 1000 > Date.now()) {
     try {
-      await Promise.all([loadConfig(), loadAdminUsers()]);
+      await Promise.all([loadConfig(), loadAdminUsers(), loadStartup()]);
       closeLoginScreen();
       await loadStatus();
       startStatusPolling();

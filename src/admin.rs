@@ -29,7 +29,12 @@ use subtle::ConstantTimeEq;
 use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tracing::{info, warn};
 
-use crate::{config::Config, server, sublink::SublinkService};
+use crate::{
+    config::Config,
+    server,
+    startup::{self, StartupInputs, StartupStatus},
+    sublink::SublinkService,
+};
 
 pub const DEFAULT_ADMIN_USERNAME: &str = "admin";
 const ADMIN_SESSION_COOKIE: &str = "sing_box_ser_mini_session";
@@ -61,10 +66,13 @@ struct AdminState {
     runtime: Arc<RwLock<RuntimeState>>,
     write_lock: Arc<Mutex<()>>,
     credentials_lock: Arc<Mutex<()>>,
+    startup_lock: Arc<Mutex<()>>,
     commands: mpsc::Sender<Command>,
     sublink: Arc<SublinkService>,
     webui_listen: Arc<String>,
     traffic: Arc<server::TrafficRegistry>,
+    startup_token_file: Arc<Option<PathBuf>>,
+    worker_threads: usize,
 }
 
 #[derive(Default)]
@@ -163,6 +171,8 @@ pub async fn run(
     listen: SocketAddr,
     token: Option<String>,
     credentials_path: PathBuf,
+    token_file: Option<PathBuf>,
+    worker_threads: usize,
 ) -> Result<()> {
     load_credentials(&credentials_path)?;
     let (commands, mut command_rx) = mpsc::channel(4);
@@ -173,12 +183,15 @@ pub async fn run(
         runtime: Arc::new(RwLock::new(RuntimeState::default())),
         write_lock: Arc::new(Mutex::new(())),
         credentials_lock: Arc::new(Mutex::new(())),
+        startup_lock: Arc::new(Mutex::new(())),
         commands,
         sublink: Arc::new(SublinkService::with_persistence(
             config_path.with_file_name("hy2-short-links.toml"),
         )?),
         webui_listen: Arc::new(listen.to_string()),
         traffic: Arc::new(server::TrafficRegistry::default()),
+        startup_token_file: Arc::new(token_file),
+        worker_threads,
     };
     let listener = tokio::net::TcpListener::bind(listen)
         .await
@@ -309,6 +322,7 @@ fn router(state: AdminState) -> Router {
         .route("/api/v1/status", get(status))
         .route("/api/v1/config", get(get_config).put(put_config))
         .route("/api/v1/reload", post(reload))
+        .route("/api/v1/startup", get(get_startup).post(install_startup))
         .route(
             "/api/v1/admin-users",
             get(list_admin_users).post(add_admin_user),
@@ -518,6 +532,43 @@ async fn reload(
         accepted: true,
         message: "HY2 service is reloading",
     }))
+}
+
+async fn get_startup(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<StartupStatus>> {
+    authorize(&state, &headers).await?;
+    let inputs = startup_inputs(&state);
+    let status = tokio::task::spawn_blocking(move || startup::inspect(&inputs))
+        .await
+        .map_err(ApiError::internal)?
+        .map_err(ApiError::internal)?;
+    Ok(Json(status))
+}
+
+async fn install_startup(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<StartupStatus>> {
+    authorize(&state, &headers).await?;
+    let _guard = state.startup_lock.lock().await;
+    let inputs = startup_inputs(&state);
+    let status = tokio::task::spawn_blocking(move || startup::install(&inputs))
+        .await
+        .map_err(ApiError::internal)?
+        .map_err(ApiError::internal)?;
+    Ok(Json(status))
+}
+
+fn startup_inputs(state: &AdminState) -> StartupInputs {
+    StartupInputs {
+        config_path: state.config_path.as_ref().clone(),
+        credentials_path: state.credentials_path.as_ref().clone(),
+        token_file: state.startup_token_file.as_ref().clone(),
+        webui_listen: state.webui_listen.as_ref().clone(),
+        worker_threads: state.worker_threads,
+    }
 }
 
 async fn list_admin_users(

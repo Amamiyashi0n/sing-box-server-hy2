@@ -167,6 +167,12 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.5; }
 .masquerade-panel { margin-top: 17px; padding-top: 17px; border-top: 1px solid var(--line-soft); }
 .masquerade-string-grid { display: grid; grid-template-columns: minmax(140px, .45fr) repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
 .masquerade-string-grid textarea { min-height: 152px; }
+.startup-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 28px; padding: 17px 0; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
+.startup-grid > div { min-width: 0; }
+.startup-grid span { display: block; margin-bottom: 6px; color: var(--subtle); font-size: 11px; }
+.startup-grid strong { display: block; color: var(--text); font-size: 13px; font-weight: 500; }
+.startup-path strong { overflow-wrap: anywhere; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; line-height: 1.55; }
+.startup-wide { grid-column: 1 / -1; }
 .admin-user-list { display: grid; gap: 8px; }
 .admin-user-row { display: grid; grid-template-columns: minmax(140px, .7fr) minmax(220px, 1.3fr) auto auto; gap: 9px; align-items: end; padding: 12px; border-radius: 8px; background: var(--surface); }
 .admin-user-name { min-width: 0; min-height: 40px; display: flex; align-items: center; gap: 8px; }
@@ -237,6 +243,10 @@ dialog::backdrop { background: rgba(0, 0, 0, .7); }
   .masquerade-mode-row { width: 100%; }
   .masquerade-string-grid { grid-template-columns: 1fr; }
   .masquerade-string-grid textarea { min-height: 128px; }
+  .startup-heading { align-items: flex-start; flex-direction: column; }
+  .startup-heading .heading-actions { width: 100%; justify-content: space-between; }
+  .startup-grid { grid-template-columns: 1fr; gap: 15px; }
+  .startup-wide { grid-column: auto; }
   .user-row { grid-template-columns: 1fr; }
   .share-protocol { grid-template-columns: 1fr; gap: 7px; }
   .share-protocol-name { padding-top: 0; }

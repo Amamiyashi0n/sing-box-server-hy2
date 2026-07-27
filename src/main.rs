@@ -48,10 +48,10 @@ fn main() -> Result<()> {
         .worker_threads(worker_threads)
         .enable_all()
         .build()?
-        .block_on(run(args))
+        .block_on(run(args, worker_threads))
 }
 
-async fn run(args: Args) -> Result<()> {
+async fn run(args: Args, worker_threads: usize) -> Result<()> {
     if args.reset_admin_password {
         let credentials = sing_box_ser_mini::admin::reset_credentials(
             &args.admin_credentials_file,
@@ -77,8 +77,9 @@ async fn run(args: Args) -> Result<()> {
     if args.no_admin {
         return sing_box_ser_mini::server::run(config).await;
     }
-    let token = if let Some(path) = args.admin_token_file {
-        Some(std::fs::read_to_string(&path)?.trim().to_owned())
+    let admin_token_file = args.admin_token_file.clone();
+    let token = if let Some(path) = &admin_token_file {
+        Some(std::fs::read_to_string(path)?.trim().to_owned())
     } else {
         std::env::var("SING_BOX_SER_MINI_ADMIN_TOKEN").ok()
     };
@@ -100,6 +101,8 @@ async fn run(args: Args) -> Result<()> {
         args.admin_listen,
         token,
         args.admin_credentials_file,
+        admin_token_file,
+        worker_threads,
     )
     .await
 }

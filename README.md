@@ -70,6 +70,13 @@ password.
 The UI provides runtime status, typed configuration editing, atomic saves, and
 HY2 service reloads without restarting the management process.
 
+The service page also detects OpenRC or systemd and can install or update the
+`sing-box-ser-mini` boot service from the WebUI. The generated service preserves
+the current executable, working directory, configuration, credential file,
+management listen address, optional token file, runtime user, and worker count.
+Installation uses root directly or a non-interactive `doas`/`sudo` policy; it
+enables the boot service without restarting the running process.
+
 ## Subscription converter
 
 The WebUI includes a Rust-native subscription converter on the same management
