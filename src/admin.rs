@@ -63,6 +63,7 @@ struct AdminState {
     commands: mpsc::Sender<Command>,
     sublink: Arc<SublinkService>,
     webui_listen: Arc<String>,
+    traffic: Arc<server::TrafficRegistry>,
 }
 
 #[derive(Default)]
@@ -94,7 +95,16 @@ struct StatusResponse {
     obfs: bool,
     up_mbps: u64,
     down_mbps: u64,
+    traffic: Vec<UserTrafficResponse>,
     last_error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct UserTrafficResponse {
+    username: String,
+    uploaded_bytes: u64,
+    downloaded_bytes: u64,
+    active_connections: u64,
 }
 
 #[derive(Serialize)]
@@ -167,6 +177,7 @@ pub async fn run(
             config_path.with_file_name("hy2-short-links.toml"),
         )?),
         webui_listen: Arc::new(listen.to_string()),
+        traffic: Arc::new(server::TrafficRegistry::default()),
     };
     let listener = tokio::net::TcpListener::bind(listen)
         .await
@@ -224,9 +235,14 @@ pub async fn run(
         }
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let mut server_task = tokio::spawn(server::run_until(config, async move {
-            let _ = shutdown_rx.await;
-        }));
+        let traffic = Arc::clone(&state.traffic);
+        let mut server_task = tokio::spawn(server::run_until_with_traffic(
+            config,
+            traffic,
+            async move {
+                let _ = shutdown_rx.await;
+            },
+        ));
         tokio::select! {
             command = command_rx.recv() => {
                 if command.is_none() {
@@ -428,6 +444,17 @@ async fn status(
         obfs: runtime.obfs,
         up_mbps: runtime.up_mbps,
         down_mbps: runtime.down_mbps,
+        traffic: state
+            .traffic
+            .snapshots()
+            .into_iter()
+            .map(|traffic| UserTrafficResponse {
+                username: traffic.username,
+                uploaded_bytes: traffic.uploaded_bytes,
+                downloaded_bytes: traffic.downloaded_bytes,
+                active_connections: traffic.active_connections,
+            })
+            .collect(),
         last_error: runtime.last_error.clone(),
     }))
 }

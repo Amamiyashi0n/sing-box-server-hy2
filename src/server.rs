@@ -1,8 +1,8 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     future::{Future, IntoFuture, pending},
     sync::{
-        Arc, Mutex as StdMutex, OnceLock, Weak,
+        Arc, Mutex as StdMutex, OnceLock, RwLock as StdRwLock, Weak,
         atomic::{AtomicU16, AtomicU64, Ordering},
     },
     time::Duration,
@@ -43,6 +43,91 @@ const RELAY_BUFFER_SIZE: usize = 32 * 1024;
 const MAX_POOLED_RELAY_BUFFERS: usize = 16;
 static RELAY_BUFFER_POOL: OnceLock<StdMutex<Vec<Vec<u8>>>> = OnceLock::new();
 
+#[derive(Default)]
+pub struct TrafficRegistry {
+    users: StdRwLock<HashMap<String, Arc<UserTraffic>>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UserTrafficSnapshot {
+    pub username: String,
+    pub uploaded_bytes: u64,
+    pub downloaded_bytes: u64,
+    pub active_connections: u64,
+}
+
+#[derive(Default)]
+struct UserTraffic {
+    uploaded_bytes: AtomicU64,
+    downloaded_bytes: AtomicU64,
+    active_connections: AtomicU64,
+}
+
+impl TrafficRegistry {
+    pub fn sync_users(&self, usernames: impl IntoIterator<Item = String>) {
+        let usernames = usernames.into_iter().collect::<HashSet<_>>();
+        let mut users = self.users.write().expect("traffic registry lock poisoned");
+        users.retain(|username, _| usernames.contains(username));
+        for username in usernames {
+            users.entry(username).or_default();
+        }
+    }
+
+    pub fn snapshots(&self) -> Vec<UserTrafficSnapshot> {
+        let users = self.users.read().expect("traffic registry lock poisoned");
+        let mut snapshots = users
+            .iter()
+            .map(|(username, traffic)| UserTrafficSnapshot {
+                username: username.clone(),
+                uploaded_bytes: traffic.uploaded_bytes.load(Ordering::Relaxed),
+                downloaded_bytes: traffic.downloaded_bytes.load(Ordering::Relaxed),
+                active_connections: traffic.active_connections.load(Ordering::Relaxed),
+            })
+            .collect::<Vec<_>>();
+        snapshots.sort_unstable_by(|left, right| left.username.cmp(&right.username));
+        snapshots
+    }
+
+    fn user(&self, username: &str) -> Arc<UserTraffic> {
+        if let Some(traffic) = self
+            .users
+            .read()
+            .expect("traffic registry lock poisoned")
+            .get(username)
+            .cloned()
+        {
+            return traffic;
+        }
+        let mut users = self.users.write().expect("traffic registry lock poisoned");
+        Arc::clone(users.entry(username.to_owned()).or_default())
+    }
+}
+
+impl UserTraffic {
+    fn connection(self: &Arc<Self>) -> ActiveConnection {
+        self.active_connections.fetch_add(1, Ordering::Relaxed);
+        ActiveConnection(Arc::clone(self))
+    }
+
+    fn record_upload(&self, bytes: usize) {
+        self.uploaded_bytes
+            .fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
+    fn record_download(&self, bytes: usize) {
+        self.downloaded_bytes
+            .fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+}
+
+struct ActiveConnection(Arc<UserTraffic>);
+
+impl Drop for ActiveConnection {
+    fn drop(&mut self) {
+        self.0.active_connections.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 pub async fn run(config: Config) -> Result<()> {
     run_until(config, pending()).await
 }
@@ -51,7 +136,19 @@ pub async fn run_until<F>(config: Config, shutdown: F) -> Result<()>
 where
     F: Future<Output = ()> + Send,
 {
+    run_until_with_traffic(config, Arc::new(TrafficRegistry::default()), shutdown).await
+}
+
+pub async fn run_until_with_traffic<F>(
+    config: Config,
+    traffic: Arc<TrafficRegistry>,
+    shutdown: F,
+) -> Result<()>
+where
+    F: Future<Output = ()> + Send,
+{
     let listen = config.listen;
+    traffic.sync_users(config.users.iter().map(|user| user.name.clone()));
     let users = Arc::new(
         config
             .users
@@ -90,6 +187,7 @@ where
         };
         let congestion = Arc::clone(&congestion);
         let users = Arc::clone(&users);
+        let traffic = Arc::clone(&traffic);
         let udp_enabled = config.udp.enabled;
         let udp_timeout = Duration::from_secs(config.udp.timeout_secs);
         let receive_bps = config.bandwidth.down_mbps.saturating_mul(125_000);
@@ -122,7 +220,11 @@ where
             match authenticate_connection(connection, authentication).await {
                 Ok((session, user)) => {
                     info!(%remote, %user, "HY2 client authenticated");
-                    if let Err(error) = serve_connection(session, udp_enabled, udp_timeout).await {
+                    let traffic = traffic.user(&user);
+                    let _active_connection = traffic.connection();
+                    if let Err(error) =
+                        serve_connection(session, udp_enabled, udp_timeout, traffic).await
+                    {
                         warn!(%remote, %error, "HY2 connection closed during TCP relay");
                     }
                 }
@@ -342,7 +444,7 @@ struct AuthenticatedSession {
     h3: H3Connection<h3_quinn::Connection, Bytes>,
 }
 
-async fn serve_tcp_streams(connection: quinn::Connection) -> Result<()> {
+async fn serve_tcp_streams(connection: quinn::Connection, traffic: Arc<UserTraffic>) -> Result<()> {
     loop {
         let (send, recv) = match connection.accept_bi().await {
             Ok(streams) => streams,
@@ -353,8 +455,9 @@ async fn serve_tcp_streams(connection: quinn::Connection) -> Result<()> {
             ) => return Ok(()),
             Err(error) => return Err(error.into()),
         };
+        let traffic = Arc::clone(&traffic);
         tokio::spawn(async move {
-            if let Err(error) = relay_tcp_stream(send, recv).await {
+            if let Err(error) = relay_tcp_stream(send, recv, traffic).await {
                 if is_peer_stream_close(&error) {
                     debug!(%error, "HY2 TCP stream closed by peer");
                 } else {
@@ -369,16 +472,17 @@ async fn serve_connection(
     session: AuthenticatedSession,
     udp_enabled: bool,
     udp_timeout: Duration,
+    traffic: Arc<UserTraffic>,
 ) -> Result<()> {
     let AuthenticatedSession {
         connection,
         h3: _h3,
     } = session;
     if !udp_enabled {
-        return serve_tcp_streams(connection).await;
+        return serve_tcp_streams(connection, traffic).await;
     }
-    let tcp = serve_tcp_streams(connection.clone());
-    let udp = serve_udp_datagrams(connection, udp_timeout);
+    let tcp = serve_tcp_streams(connection.clone(), Arc::clone(&traffic));
+    let udp = serve_udp_datagrams(connection, udp_timeout, traffic);
     tokio::try_join!(tcp, udp)?;
     Ok(())
 }
@@ -388,7 +492,11 @@ struct UdpSession {
     next_packet_id: AtomicU16,
 }
 
-async fn serve_udp_datagrams(connection: quinn::Connection, udp_timeout: Duration) -> Result<()> {
+async fn serve_udp_datagrams(
+    connection: quinn::Connection,
+    udp_timeout: Duration,
+    traffic: Arc<UserTraffic>,
+) -> Result<()> {
     let mut sessions = HashMap::<u32, Arc<UdpSession>>::new();
     let (expiration_tx, mut expiration_rx) = mpsc::unbounded_channel::<(u32, Weak<UdpSession>)>();
     let mut reassembler = crate::protocol::UdpReassembler::default();
@@ -430,6 +538,7 @@ async fn serve_udp_datagrams(connection: quinn::Connection, udp_timeout: Duratio
             message.session_id,
             udp_timeout,
             &expiration_tx,
+            &traffic,
         )
         .await?;
         session
@@ -437,6 +546,7 @@ async fn serve_udp_datagrams(connection: quinn::Connection, udp_timeout: Duratio
             .send_to(&message.payload, &message.destination)
             .await
             .with_context(|| format!("send UDP packet to {}", message.destination))?;
+        traffic.record_upload(message.payload.len());
     }
 }
 
@@ -446,6 +556,7 @@ async fn get_udp_session(
     session_id: u32,
     udp_timeout: Duration,
     expiration_tx: &mpsc::UnboundedSender<(u32, Weak<UdpSession>)>,
+    traffic: &Arc<UserTraffic>,
 ) -> Result<Arc<UdpSession>> {
     if let Some(session) = sessions.get(&session_id).cloned() {
         return Ok(session);
@@ -465,6 +576,7 @@ async fn get_udp_session(
     let response_session = Arc::clone(&session);
     let expiration_tx = expiration_tx.clone();
     let expiration_session = Arc::downgrade(&session);
+    let traffic = Arc::clone(traffic);
     tokio::spawn(async move {
         let mut buffer = vec![0_u8; crate::protocol::MAX_UDP_SIZE];
         'receive: loop {
@@ -501,13 +613,18 @@ async fn get_udp_session(
                     break 'receive;
                 }
             }
+            traffic.record_download(length);
         }
         let _ = expiration_tx.send((session_id, expiration_session));
     });
     Ok(session)
 }
 
-async fn relay_tcp_stream(mut send: quinn::SendStream, mut recv: quinn::RecvStream) -> Result<()> {
+async fn relay_tcp_stream(
+    mut send: quinn::SendStream,
+    mut recv: quinn::RecvStream,
+    traffic: Arc<UserTraffic>,
+) -> Result<()> {
     let frame_type = read_varint(&mut recv).await?;
     if frame_type != FRAME_TYPE_TCP_REQUEST {
         bail!("unexpected HY2 stream frame type {frame_type:#x}");
@@ -535,11 +652,17 @@ async fn relay_tcp_stream(mut send: quinn::SendStream, mut recv: quinn::RecvStre
     send.write_all(&response.encode(&random_padding(128, 1024)?)?)
         .await?;
     upstream.write_all(&request.payload).await?;
+    traffic.record_upload(request.payload.len());
     let (mut upstream_read, mut upstream_write) = upstream.into_split();
+    let upload_traffic = Arc::clone(&traffic);
     let to_upstream = async move {
-        copy_with_reused_buffer(&mut recv, &mut upstream_write)
-            .await
-            .context("relay client data to destination")?;
+        copy_with_reused_buffer(
+            &mut recv,
+            &mut upstream_write,
+            &upload_traffic.uploaded_bytes,
+        )
+        .await
+        .context("relay client data to destination")?;
         upstream_write
             .shutdown()
             .await
@@ -547,7 +670,7 @@ async fn relay_tcp_stream(mut send: quinn::SendStream, mut recv: quinn::RecvStre
         Ok::<(), anyhow::Error>(())
     };
     let from_upstream = async move {
-        copy_with_reused_buffer(&mut upstream_read, &mut send)
+        copy_with_reused_buffer(&mut upstream_read, &mut send, &traffic.downloaded_bytes)
             .await
             .context("relay destination data to client")?;
         send.finish().context("finish HY2 response stream")?;
@@ -650,7 +773,11 @@ impl Drop for RelayBuffer {
     }
 }
 
-async fn copy_with_reused_buffer<R, W>(reader: &mut R, writer: &mut W) -> std::io::Result<u64>
+async fn copy_with_reused_buffer<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+    counter: &AtomicU64,
+) -> std::io::Result<u64>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
@@ -664,5 +791,59 @@ where
         }
         writer.write_all(&buffer.as_mut_slice()[..read]).await?;
         copied = copied.saturating_add(read as u64);
+        counter.fetch_add(read as u64, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn traffic_registry_tracks_users_and_preserves_existing_counters() {
+        let registry = TrafficRegistry::default();
+        registry.sync_users(["poetry".to_owned(), "amamiya".to_owned()]);
+        let poetry = registry.user("poetry");
+        poetry.record_upload(1_024);
+        poetry.record_download(2_048);
+        let active = poetry.connection();
+
+        assert_eq!(
+            registry.snapshots(),
+            vec![
+                UserTrafficSnapshot {
+                    username: "amamiya".to_owned(),
+                    uploaded_bytes: 0,
+                    downloaded_bytes: 0,
+                    active_connections: 0,
+                },
+                UserTrafficSnapshot {
+                    username: "poetry".to_owned(),
+                    uploaded_bytes: 1_024,
+                    downloaded_bytes: 2_048,
+                    active_connections: 1,
+                },
+            ]
+        );
+
+        registry.sync_users(["poetry".to_owned(), "new-user".to_owned()]);
+        drop(active);
+        assert_eq!(
+            registry.snapshots(),
+            vec![
+                UserTrafficSnapshot {
+                    username: "new-user".to_owned(),
+                    uploaded_bytes: 0,
+                    downloaded_bytes: 0,
+                    active_connections: 0,
+                },
+                UserTrafficSnapshot {
+                    username: "poetry".to_owned(),
+                    uploaded_bytes: 1_024,
+                    downloaded_bytes: 2_048,
+                    active_connections: 0,
+                },
+            ]
+        );
     }
 }

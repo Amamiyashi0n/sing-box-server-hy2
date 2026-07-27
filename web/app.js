@@ -17,6 +17,7 @@ const state = {
   sessionExpiresAt: Number(savedAdminSession?.expiresAt) || 0,
   timer: null,
   adminUsers: [],
+  trafficSamples: new Map(),
   shareShortLinks: new Map(),
   shareShortLinkErrors: new Map(),
   shareShortLinksPending: new Set(),
@@ -190,6 +191,62 @@ function formatUptime(seconds) {
   return `${seconds}秒`;
 }
 
+function formatBytes(value) {
+  let amount = Math.max(0, Number(value) || 0);
+  if (amount < 1024) return `${Math.round(amount)} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let unit = 0;
+  amount /= 1024;
+  while (amount >= 1024 && unit < units.length - 1) {
+    amount /= 1024;
+    unit += 1;
+  }
+  const digits = amount >= 100 ? 0 : amount >= 10 ? 1 : 2;
+  return `${amount.toFixed(digits)} ${units[unit]}`;
+}
+
+function renderTraffic(users) {
+  const target = $("#traffic-list");
+  const now = Date.now();
+  const nextSamples = new Map();
+  if (!users.length) {
+    target.innerHTML = '<div class="empty traffic-empty">暂无认证用户</div>';
+    state.trafficSamples = nextSamples;
+    return;
+  }
+  target.innerHTML = users.map(user => {
+    const uploaded = Number(user.uploaded_bytes) || 0;
+    const downloaded = Number(user.downloaded_bytes) || 0;
+    const previous = state.trafficSamples.get(user.username);
+    const elapsed = previous ? Math.max((now - previous.at) / 1000, 0.001) : 0;
+    const uploadRate = previous && uploaded >= previous.uploaded
+      ? (uploaded - previous.uploaded) / elapsed
+      : 0;
+    const downloadRate = previous && downloaded >= previous.downloaded
+      ? (downloaded - previous.downloaded) / elapsed
+      : 0;
+    const active = Number(user.active_connections) || 0;
+    nextSamples.set(user.username, { uploaded, downloaded, at: now });
+    return `
+      <div class="traffic-row">
+        <div class="traffic-user">
+          <strong>${escapeHtml(user.username)}</strong>
+          <span class="${active ? "active" : ""}">${active ? `${active} 个活动连接` : "无活动连接"}</span>
+        </div>
+        <div class="traffic-value">
+          <strong>${formatBytes(uploaded)}</strong>
+          <span>${formatBytes(uploadRate)}/s</span>
+        </div>
+        <div class="traffic-value">
+          <strong>${formatBytes(downloaded)}</strong>
+          <span>${formatBytes(downloadRate)}/s</span>
+        </div>
+      </div>
+    `;
+  }).join("");
+  state.trafficSamples = nextSamples;
+}
+
 function listenAddressPair(value) {
   const address = String(value || "");
   const port = address.match(/^\[::\]:(\d+)$/);
@@ -214,6 +271,7 @@ async function loadStatus() {
     $("#metric-webui-listen").textContent = status.webui_listen || "--";
     $("#metric-users").textContent = String(status.users);
     $("#metric-uptime").textContent = formatUptime(status.uptime_secs);
+    renderTraffic(status.traffic || []);
     $("#flag-udp").textContent = `UDP ${status.udp_enabled ? "ON" : "OFF"}`;
     $("#flag-obfs").textContent = `Salamander ${status.obfs ? "ON" : "OFF"}`;
     $("#flag-generation").textContent = `Generation ${status.generation}`;
