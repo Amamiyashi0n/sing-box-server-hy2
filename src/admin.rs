@@ -322,7 +322,12 @@ fn router(state: AdminState) -> Router {
         .route("/api/v1/status", get(status))
         .route("/api/v1/config", get(get_config).put(put_config))
         .route("/api/v1/reload", post(reload))
-        .route("/api/v1/startup", get(get_startup).post(install_startup))
+        .route(
+            "/api/v1/startup",
+            get(get_startup)
+                .post(install_startup)
+                .delete(uninstall_startup),
+        )
         .route(
             "/api/v1/admin-users",
             get(list_admin_users).post(add_admin_user),
@@ -555,6 +560,20 @@ async fn install_startup(
     let _guard = state.startup_lock.lock().await;
     let inputs = startup_inputs(&state);
     let status = tokio::task::spawn_blocking(move || startup::install(&inputs))
+        .await
+        .map_err(ApiError::internal)?
+        .map_err(ApiError::internal)?;
+    Ok(Json(status))
+}
+
+async fn uninstall_startup(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<StartupStatus>> {
+    authorize(&state, &headers).await?;
+    let _guard = state.startup_lock.lock().await;
+    let inputs = startup_inputs(&state);
+    let status = tokio::task::spawn_blocking(move || startup::uninstall(&inputs))
         .await
         .map_err(ApiError::internal)?
         .map_err(ApiError::internal)?;

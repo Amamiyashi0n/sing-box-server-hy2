@@ -109,6 +109,63 @@ pub fn install(inputs: &StartupInputs) -> Result<StartupStatus> {
     result
 }
 
+pub fn uninstall(inputs: &StartupInputs) -> Result<StartupStatus> {
+    let manager = detect_manager()
+        .ok_or_else(|| anyhow::anyhow!("unsupported init system; OpenRC or systemd is required"))?;
+    let spec = build_spec(manager, inputs)?;
+    let status = status_for_spec(&spec)?;
+
+    match manager {
+        ServiceManager::OpenRc => {
+            if status.enabled {
+                let rc_update =
+                    find_program(&["/sbin/rc-update", "/usr/sbin/rc-update", "rc-update"])
+                        .ok_or_else(|| anyhow::anyhow!("rc-update command was not found"))?;
+                run_privileged(
+                    &rc_update,
+                    &["del".into(), SERVICE_NAME.into(), "default".into()],
+                )?;
+            }
+        }
+        ServiceManager::Systemd => {
+            let systemctl = find_program(&[
+                "/usr/bin/systemctl",
+                "/bin/systemctl",
+                "/usr/sbin/systemctl",
+                "systemctl",
+            ])
+            .ok_or_else(|| anyhow::anyhow!("systemctl command was not found"))?;
+            if status.enabled {
+                run_privileged(
+                    &systemctl,
+                    &["disable".into(), format!("{SERVICE_NAME}.service").into()],
+                )?;
+            }
+        }
+    }
+
+    if status.installed {
+        let remove_program = find_program(&["/bin/rm", "/usr/bin/rm", "rm"])
+            .ok_or_else(|| anyhow::anyhow!("rm command was not found"))?;
+        run_privileged(
+            &remove_program,
+            &["-f".into(), spec.service_path.as_os_str().to_owned()],
+        )?;
+    }
+
+    if manager == ServiceManager::Systemd {
+        let systemctl = find_program(&[
+            "/usr/bin/systemctl",
+            "/bin/systemctl",
+            "/usr/sbin/systemctl",
+            "systemctl",
+        ])
+        .ok_or_else(|| anyhow::anyhow!("systemctl command was not found"))?;
+        run_privileged(&systemctl, &["daemon-reload".into()])?;
+    }
+    status_for_spec(&spec)
+}
+
 fn unsupported_status(inputs: &StartupInputs) -> StartupStatus {
     StartupStatus {
         supported: false,

@@ -73,12 +73,12 @@ The listener is configured as a port in the WebUI and saved as `[::]:<port>`;
 the UDP socket explicitly enables dual-stack mode so the same port accepts
 both IPv4 and IPv6 traffic.
 
-The service page also detects OpenRC or systemd and can install or update the
+The service page also detects OpenRC or systemd and can install or remove the
 `sing-box-ser-mini` boot service from the WebUI. The generated service preserves
 the current executable, working directory, configuration, credential file,
 management listen address, optional token file, runtime user, and worker count.
 Installation uses root directly or a non-interactive `doas`/`sudo` policy; it
-enables the boot service without restarting the running process.
+enables or removes the boot service without restarting the running process.
 
 ## Subscription converter
 
