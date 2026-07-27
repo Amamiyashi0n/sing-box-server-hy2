@@ -108,8 +108,8 @@
             <label class="field"><span>TLS 私钥</span><input id="private-key" required placeholder="/path/privkey.pem"></label>
           </div>
           <div class="field-grid three share-settings">
-            <label class="field"><span>IPv4 公网地址</span><input id="share-ipv4-server" placeholder="203.0.113.10"></label>
-            <label class="field"><span>IPv6 公网地址</span><input id="share-ipv6-server" placeholder="2001:db8::10"></label>
+            <div class="display-field"><span>IPv4 地址（自动）</span><strong id="share-ipv4-server" data-address="">未检测到</strong></div>
+            <div class="display-field"><span>IPv6 地址（自动）</span><strong id="share-ipv6-server" data-address="">未检测到</strong></div>
             <label class="field"><span>公网端口</span><input id="share-port" type="number" min="1" max="65535" step="1" placeholder="443"></label>
             <label class="field"><span>TLS SNI</span><input id="share-sni" placeholder="hy2.example.com"></label>
             <label class="check share-insecure"><input id="share-insecure" type="checkbox"><span>允许不安全证书</span></label>

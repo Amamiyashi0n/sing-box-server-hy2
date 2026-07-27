@@ -352,6 +352,13 @@ function listenAddressPair(value) {
   return { ipv4: address || "--", ipv6: "--" };
 }
 
+function setDetectedAddress(selector, value) {
+  const target = $(selector);
+  const address = String(value || "").trim();
+  target.dataset.address = address;
+  target.textContent = address || "未检测到";
+}
+
 async function loadStatus() {
   try {
     const status = await api("/api/v1/status");
@@ -384,8 +391,8 @@ async function loadConfig() {
   $("#listen").value = config.listen || "";
   $("#certificate").value = config.tls?.certificate || "";
   $("#private-key").value = config.tls?.private_key || "";
-  $("#share-ipv4-server").value = config.share?.server || "";
-  $("#share-ipv6-server").value = config.share?.ipv6_server || "";
+  setDetectedAddress("#share-ipv4-server", config.share?.server);
+  setDetectedAddress("#share-ipv6-server", config.share?.ipv6_server);
   $("#share-port").value = config.share?.port ?? listenPort(config.listen) ?? 443;
   $("#share-sni").value = config.share?.sni || "";
   $("#share-insecure").checked = Boolean(config.share?.insecure);
@@ -559,8 +566,8 @@ function buildShareLink(user, server) {
 
 function currentShareLinks() {
   const servers = [
-    { family: "IPv4", server: $("#share-ipv4-server").value.trim() },
-    { family: "IPv6", server: $("#share-ipv6-server").value.trim() }
+    { family: "IPv4", server: $("#share-ipv4-server").dataset.address },
+    { family: "IPv6", server: $("#share-ipv6-server").dataset.address }
   ].filter(item => item.server);
   return collectUsers(false).flatMap(user => servers.map(({ family, server }) => ({
     user,
@@ -580,8 +587,8 @@ function renderShareLinks() {
   if (!target) return;
   const links = currentShareLinks();
   $("#link-count").textContent = `${links.length} 个链接`;
-  if (!$("#share-ipv4-server").value.trim() && !$("#share-ipv6-server").value.trim()) {
-    target.innerHTML = '<div class="empty">填写 IPv4 或 IPv6 公网地址后生成链接</div>';
+  if (!$("#share-ipv4-server").dataset.address && !$("#share-ipv6-server").dataset.address) {
+    target.innerHTML = '<div class="empty">未检测到可用于客户端链接的 IPv4 或 IPv6 地址</div>';
     return;
   }
   if (!links.length) {
@@ -786,8 +793,8 @@ function collectMasquerade() {
 
 function collectConfig() {
   const obfsEnabled = $("#obfs-enabled").checked;
-  const shareIpv4Server = $("#share-ipv4-server").value.trim();
-  const shareIpv6Server = $("#share-ipv6-server").value.trim();
+  const shareIpv4Server = $("#share-ipv4-server").dataset.address;
+  const shareIpv6Server = $("#share-ipv6-server").dataset.address;
   return {
     listen: $("#listen").value.trim(),
     tls: { certificate: $("#certificate").value.trim(), private_key: $("#private-key").value.trim() },

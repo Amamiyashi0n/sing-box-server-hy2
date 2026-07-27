@@ -117,6 +117,10 @@ h2 { font-size: 16px; font-weight: 600; }
 .field-grid.three .wide { grid-column: 1 / -1; }
 .field-grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .field { min-width: 0; display: block; }
+.display-field { min-width: 0; }
+.display-field > span { display: block; margin-bottom: 8px; color: var(--muted); font-size: 12px; }
+.display-field > strong { width: 100%; min-height: 40px; display: flex; align-items: center; overflow: hidden; padding: 8px 11px; border: 1px solid #3f3f3f; border-radius: 7px; background: #242424; color: var(--muted); font-size: 13px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.display-field > strong[data-address=""] { color: var(--subtle); }
 input, select, textarea { width: 100%; min-height: 40px; padding: 8px 11px; border: 1px solid #4b4b4b; border-radius: 7px; background: var(--input); color: var(--text); }
 input:hover, select:hover, textarea:hover { border-color: #666; background: #202020; }
 input:focus, select:focus, textarea:focus { border-color: #9a9a9a; background: #202020; }

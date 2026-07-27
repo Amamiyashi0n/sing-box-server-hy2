@@ -1,7 +1,7 @@
 use std::{
     fs::{self, OpenOptions},
     io::Write as _,
-    net::SocketAddr,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket},
     path::{Path, PathBuf},
     sync::Arc,
     time::{Instant, SystemTime, UNIX_EPOCH},
@@ -188,7 +188,7 @@ pub async fn run(
 
     let mut generation = 0_u64;
     loop {
-        let config = match Config::load(&config_path) {
+        let mut config = match Config::load(&config_path) {
             Ok(config) => config,
             Err(error) => {
                 let mut runtime = state.runtime.write().await;
@@ -206,6 +206,7 @@ pub async fn run(
                 }
             }
         };
+        apply_auto_share_addresses(&mut config);
         generation = generation.saturating_add(1);
         {
             let mut runtime = state.runtime.write().await;
@@ -465,19 +466,24 @@ async fn get_config(
 ) -> ApiResult<Json<Config>> {
     authorize(&state, &headers).await?;
     let path = Arc::clone(&state.config_path);
-    let config = tokio::task::spawn_blocking(move || Config::load(&path))
-        .await
-        .map_err(ApiError::internal)?
-        .map_err(ApiError::bad_request)?;
+    let config = tokio::task::spawn_blocking(move || {
+        let mut config = Config::load(&path)?;
+        apply_auto_share_addresses(&mut config);
+        Ok::<_, anyhow::Error>(config)
+    })
+    .await
+    .map_err(ApiError::internal)?
+    .map_err(ApiError::bad_request)?;
     Ok(Json(config))
 }
 
 async fn put_config(
     State(state): State<AdminState>,
     headers: HeaderMap,
-    Json(config): Json<Config>,
+    Json(mut config): Json<Config>,
 ) -> ApiResult<Json<MutationResponse>> {
     authorize(&state, &headers).await?;
+    apply_auto_share_addresses(&mut config);
     config.validate().map_err(ApiError::bad_request)?;
     let _guard = state.write_lock.lock().await;
     let path = Arc::clone(&state.config_path);
@@ -884,6 +890,65 @@ fn unix_time() -> u64 {
         .as_secs()
 }
 
+#[derive(Default)]
+struct NetworkAddresses {
+    ipv4: Option<Ipv4Addr>,
+    ipv6: Option<Ipv6Addr>,
+}
+
+fn apply_auto_share_addresses(config: &mut Config) {
+    let Some(share) = &mut config.share else {
+        return;
+    };
+    let addresses = detect_network_addresses(config.listen);
+    if addresses.ipv4.is_none() && addresses.ipv6.is_none() {
+        return;
+    }
+    share.server = addresses.ipv4.map_or_else(String::new, |ip| ip.to_string());
+    share.ipv6_server = addresses.ipv6.map_or_else(String::new, |ip| ip.to_string());
+}
+
+fn detect_network_addresses(listen: SocketAddr) -> NetworkAddresses {
+    match listen.ip() {
+        IpAddr::V4(ip) if !ip.is_unspecified() => NetworkAddresses {
+            ipv4: Some(ip),
+            ipv6: None,
+        },
+        IpAddr::V4(_) => NetworkAddresses {
+            ipv4: probe_ipv4_route(),
+            ipv6: None,
+        },
+        IpAddr::V6(ip) if !ip.is_unspecified() => NetworkAddresses {
+            ipv4: None,
+            ipv6: Some(ip),
+        },
+        IpAddr::V6(_) => NetworkAddresses {
+            ipv4: probe_ipv4_route(),
+            ipv6: probe_ipv6_route(),
+        },
+    }
+}
+
+fn probe_ipv4_route() -> Option<Ipv4Addr> {
+    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    socket.connect((Ipv4Addr::new(1, 1, 1, 1), 53)).ok()?;
+    match socket.local_addr().ok()?.ip() {
+        IpAddr::V4(ip) if !ip.is_unspecified() => Some(ip),
+        _ => None,
+    }
+}
+
+fn probe_ipv6_route() -> Option<Ipv6Addr> {
+    let socket = UdpSocket::bind((Ipv6Addr::UNSPECIFIED, 0)).ok()?;
+    socket
+        .connect(("2606:4700:4700::1111".parse::<Ipv6Addr>().ok()?, 53))
+        .ok()?;
+    match socket.local_addr().ok()?.ip() {
+        IpAddr::V6(ip) if !ip.is_unspecified() => Some(ip),
+        _ => None,
+    }
+}
+
 fn decode_basic_credentials(authorization: &str) -> Option<(Vec<u8>, Vec<u8>)> {
     let encoded = authorization.strip_prefix("Basic ")?;
     let decoded = STANDARD.decode(encoded).ok()?;
@@ -1151,5 +1216,17 @@ mod tests {
             validate_session_token(std::str::from_utf8(&tampered).unwrap(), &credentials, 100),
             None
         );
+    }
+
+    #[test]
+    fn explicit_listen_addresses_are_used_for_read_only_share_addresses() {
+        let ipv4: SocketAddr = "192.0.2.10:443".parse().unwrap();
+        let ipv6: SocketAddr = "[2001:db8::10]:443".parse().unwrap();
+        let ipv4_addresses = detect_network_addresses(ipv4);
+        let ipv6_addresses = detect_network_addresses(ipv6);
+        assert_eq!(ipv4_addresses.ipv4, Some("192.0.2.10".parse().unwrap()));
+        assert_eq!(ipv4_addresses.ipv6, None);
+        assert_eq!(ipv6_addresses.ipv4, None);
+        assert_eq!(ipv6_addresses.ipv6, Some("2001:db8::10".parse().unwrap()));
     }
 }
