@@ -544,18 +544,25 @@ impl SublinkService {
         let rules = selected_rule_specs(preset, ad_block);
         let custom_rules = parse_custom_rules(whitelist, blacklist)?;
         let china_optimized = preset == Some(RulePreset::China);
+        let profile_name = subscription_name(&nodes);
         match format {
             "singbox" => Ok(SublinkOutput::new(
                 "application/json; charset=utf-8",
                 render_singbox(&nodes, &rules, &custom_rules, china_optimized)?,
+                profile_name,
+                "json",
             )),
             "clash" => Ok(SublinkOutput::new(
                 "text/yaml; charset=utf-8",
                 render_clash(&nodes, &rules, &custom_rules, clash_mrs, china_optimized),
+                profile_name,
+                "yaml",
             )),
             "surge" => Ok(SublinkOutput::new(
                 "text/plain; charset=utf-8",
                 render_surge(&nodes, &rules, &custom_rules, china_optimized),
+                profile_name,
+                "conf",
             )),
             "xray" => Ok(SublinkOutput::new(
                 "text/plain; charset=utf-8",
@@ -566,6 +573,8 @@ impl SublinkService {
                         .collect::<Vec<_>>()
                         .join("\n"),
                 ),
+                profile_name,
+                "txt",
             )),
             _ => bail!("unsupported output format"),
         }
@@ -690,6 +699,16 @@ impl SublinkService {
     }
 
     pub async fn auto(&self, code: &str, user_agent: &str, accept: &str) -> Result<SublinkOutput> {
+        self.auto_with_format(code, user_agent, accept, None).await
+    }
+
+    pub async fn auto_with_format(
+        &self,
+        code: &str,
+        user_agent: &str,
+        accept: &str,
+        requested_format: Option<&str>,
+    ) -> Result<SublinkOutput> {
         ensure!(valid_code(code), "invalid short URL");
         let query = self
             .store
@@ -704,7 +723,10 @@ impl SublinkService {
         let ad_block = query_bool(&url, &["adblock"]);
         let whitelist = query_value_optional(&url, &["whitelist"]);
         let blacklist = query_value_optional(&url, &["blacklist"]);
-        let format = auto_format(user_agent, accept);
+        let format = requested_format
+            .map(normalize_format)
+            .transpose()?
+            .unwrap_or_else(|| auto_format(user_agent, accept));
         self.convert_with_rule_format(
             format,
             &config,
@@ -734,12 +756,33 @@ impl SublinkService {
 pub struct SublinkOutput {
     pub content_type: &'static str,
     pub body: String,
+    pub profile_name: String,
+    pub file_extension: &'static str,
 }
 
 impl SublinkOutput {
-    fn new(content_type: &'static str, body: String) -> Self {
-        Self { content_type, body }
+    fn new(
+        content_type: &'static str,
+        body: String,
+        profile_name: String,
+        file_extension: &'static str,
+    ) -> Self {
+        Self {
+            content_type,
+            body,
+            profile_name,
+            file_extension,
+        }
     }
+}
+
+fn subscription_name(nodes: &[Node]) -> String {
+    nodes
+        .first()
+        .map(|node| node.name.trim())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("subscription")
+        .to_owned()
 }
 
 fn positive_env(name: &str, fallback: usize) -> usize {
@@ -1648,7 +1691,7 @@ fn auto_format(user_agent: &str, accept: &str) -> &'static str {
         || user_agent.contains("nyanpasu")
         || user_agent.contains("clashmi")
         || user_agent.contains("sparkle")
-        || accept.contains("yaml")
+        || user_agent.contains("surfboard")
     {
         "clash"
     } else if user_agent.contains("surge") {
@@ -1658,11 +1701,24 @@ fn auto_format(user_agent: &str, accept: &str) -> &'static str {
         || user_agent.starts_with("sfa/")
         || user_agent.starts_with("sfi/")
         || user_agent.starts_with("sfm/")
-        || accept.contains("json")
     {
+        "singbox"
+    } else if accept.contains("yaml") || accept.contains("yml") {
+        "clash"
+    } else if accept.contains("json") {
         "singbox"
     } else {
         "xray"
+    }
+}
+
+fn normalize_format(format: &str) -> Result<&'static str> {
+    match format.trim().to_ascii_lowercase().as_str() {
+        "singbox" | "sing-box" | "json" => Ok("singbox"),
+        "clash" | "mihomo" | "yaml" | "yml" => Ok("clash"),
+        "surge" => Ok("surge"),
+        "xray" | "v2ray" | "base64" | "universal" => Ok("xray"),
+        _ => bail!("unsupported output format"),
     }
 }
 
@@ -1875,8 +1931,12 @@ mod tests {
             "Clash Verge Rev",
             "ClashMetaForAndroid/2.11.28",
             "mihomo/1.19.12",
+            "Surfboard/2.24",
         ] {
-            let body = service.auto(&code, user_agent, "").await.unwrap().body;
+            let output = service.auto(&code, user_agent, "").await.unwrap();
+            assert_eq!(output.profile_name, "user");
+            assert_eq!(output.file_extension, "yaml");
+            let body = output.body;
             assert!(body.contains("proxies:"));
             assert!(body.contains("log-level: warning"));
             assert!(body.contains("type: 'hysteria2'"));
@@ -1896,6 +1956,44 @@ mod tests {
         assert_eq!(
             service.auto(&code, "xray", "").await.unwrap().content_type,
             "text/plain; charset=utf-8"
+        );
+    }
+
+    #[tokio::test]
+    async fn adaptive_links_allow_explicit_format_aliases() {
+        let service = SublinkService::default();
+        let config = "hysteria2://password@example.com:443/?sni=example.com#poetry";
+        let raw = format!(
+            "https://example.com/xray?config={}",
+            url::form_urlencoded::byte_serialize(config.as_bytes()).collect::<String>()
+        );
+        let code = service.shorten_hy2(&raw).await.unwrap();
+
+        let clash = service
+            .auto_with_format(&code, "unknown", "*/*", Some("mihomo"))
+            .await
+            .unwrap();
+        assert_eq!(clash.profile_name, "poetry");
+        assert_eq!(clash.file_extension, "yaml");
+        assert!(clash.body.contains("proxies:"));
+
+        let singbox = service
+            .auto_with_format(&code, "unknown", "*/*", Some("sing-box"))
+            .await
+            .unwrap();
+        assert_eq!(singbox.file_extension, "json");
+        assert!(singbox.body.contains("\"outbounds\""));
+
+        let universal = service
+            .auto_with_format(&code, "unknown", "*/*", Some("universal"))
+            .await
+            .unwrap();
+        assert_eq!(STANDARD.decode(universal.body).unwrap(), config.as_bytes());
+        assert!(
+            service
+                .auto_with_format(&code, "unknown", "*/*", Some("unsupported"))
+                .await
+                .is_err()
         );
     }
 
@@ -1948,8 +2046,25 @@ mod tests {
 
         let surge = service.auto(&code, "Surge/5.8", "").await.unwrap().body;
         assert!(surge.starts_with("[General]"));
-        let universal = service.auto(&code, "v2rayN/7.0", "").await.unwrap();
-        assert_eq!(STANDARD.decode(universal.body).unwrap(), config.as_bytes());
+        for user_agent in [
+            "v2rayN/7.0",
+            "v2rayNG/1.9",
+            "Shadowrocket/2.2",
+            "Quantumult%20X/1.5",
+            "Loon/3.2",
+            "NekoBox/1.3",
+            "Hiddify/2.5",
+            "Karing/1.2",
+            "Streisand/1.6",
+        ] {
+            let universal = service.auto(&code, user_agent, "").await.unwrap();
+            assert_eq!(universal.file_extension, "txt", "{user_agent}");
+            assert_eq!(
+                STANDARD.decode(universal.body).unwrap(),
+                config.as_bytes(),
+                "{user_agent}"
+            );
+        }
     }
 
     #[tokio::test]

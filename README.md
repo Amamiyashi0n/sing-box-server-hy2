@@ -95,10 +95,16 @@ that format has no routing-policy container.
 
 Adaptive user subscriptions recognize Sing-Box/SFA/SFI/SFM, Mihomo and modern
 Clash clients (including Verge Rev, Meta for Android, FlClash, Nyanpasu,
-Mihomo Party, ClashMi, Stash), Surge, and Xray/V2Ray-style clients. Legacy
-Clash clients receive YAML rule providers instead of unsupported MRS files.
-User IPv4/IPv6 links are permanent; only converter-workspace links use the
-24-hour persisted TTL.
+Mihomo Party, ClashMi, Stash, Sparkle, and Surfboard), Surge, and universal
+URI clients such as Xray/V2Ray, Shadowrocket, Quantumult X, Loon, NekoBox,
+Hiddify, Karing, and Streisand. Unknown clients receive the broadly compatible
+Base64 URI subscription. Legacy Clash clients receive YAML rule providers
+instead of unsupported MRS files. Add `?format=clash`, `?format=singbox`,
+`?format=surge`, or `?format=xray` to an adaptive `/sub/<code>` URL when a
+client does not send an identifiable User-Agent. Subscription responses use
+the first node name (the HY2 username for generated user links) as the profile
+title and download filename. User IPv4/IPv6 links are permanent; only
+converter-workspace links use the 24-hour persisted TTL.
 
 The conversion behavior was rewritten in Rust from the MIT-licensed
 `Amamiyashi0n/sublink-worker-c` implementation; no C code, darkhttpd process,

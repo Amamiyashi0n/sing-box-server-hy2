@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use axum::{
     Json, Router,
     extract::{OriginalUri, Path as AxumPath, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
@@ -23,6 +23,7 @@ use blake2::{
     Blake2b512, Blake2bMac512, Digest,
     digest::{KeyInit, Mac},
 };
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
@@ -653,15 +654,7 @@ fn sublink_convert(
         whitelist.as_deref(),
         blacklist.as_deref(),
     ) {
-        Ok(output) => (
-            [
-                (header::CONTENT_TYPE, output.content_type),
-                (header::CACHE_CONTROL, "no-store"),
-                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-            ],
-            output.body,
-        )
-            .into_response(),
+        Ok(output) => sublink_output_response(output),
         Err(error) => sublink_error(StatusCode::BAD_REQUEST, error),
     }
 }
@@ -710,6 +703,7 @@ async fn sublink_auto(
     State(state): State<AdminState>,
     headers: HeaderMap,
     AxumPath(code): AxumPath<String>,
+    OriginalUri(uri): OriginalUri,
 ) -> Response {
     let user_agent = headers
         .get(header::USER_AGENT)
@@ -719,17 +713,69 @@ async fn sublink_auto(
         .get(header::ACCEPT)
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
-    match state.sublink.auto(&code, user_agent, accept).await {
-        Ok(output) => (
-            [
-                (header::CONTENT_TYPE, output.content_type),
-                (header::CACHE_CONTROL, "no-store"),
-                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-            ],
-            output.body,
-        )
-            .into_response(),
+    let requested_format = uri_parameter(&uri, "format").or_else(|| uri_parameter(&uri, "target"));
+    match state
+        .sublink
+        .auto_with_format(&code, user_agent, accept, requested_format.as_deref())
+        .await
+    {
+        Ok(output) => sublink_output_response(output),
         Err(error) => sublink_error(sublink_status(&error), error),
+    }
+}
+
+fn sublink_output_response(output: crate::sublink::SublinkOutput) -> Response {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(output.content_type),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        HeaderName::from_static("profile-title"),
+        HeaderValue::from_str(&format!(
+            "base64:{}",
+            STANDARD.encode(output.profile_name.as_bytes())
+        ))
+        .expect("base64 profile title is a valid header value"),
+    );
+    headers.insert(
+        HeaderName::from_static("profile-update-interval"),
+        HeaderValue::from_static("24"),
+    );
+    let encoded_name = utf8_percent_encode(&output.profile_name, NON_ALPHANUMERIC);
+    let fallback_name = ascii_profile_name(&output.profile_name);
+    let disposition = format!(
+        "attachment; filename=\"{fallback_name}.{}\"; filename*=UTF-8''{encoded_name}.{}",
+        output.file_extension, output.file_extension
+    );
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&disposition).expect("encoded filename is a valid header value"),
+    );
+    (headers, output.body).into_response()
+}
+
+fn ascii_profile_name(name: &str) -> String {
+    let name = name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let name = name.trim_matches('_');
+    if name.is_empty() {
+        "subscription".to_owned()
+    } else {
+        name.to_owned()
     }
 }
 
@@ -1137,6 +1183,23 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subscription_response_uses_node_name_as_profile_title() {
+        let output = SublinkService::default()
+            .convert(
+                "clash",
+                "hysteria2://password@example.com:443/?sni=example.com#poetry",
+            )
+            .unwrap();
+        let response = sublink_output_response(output);
+        assert_eq!(response.headers()["profile-title"], "base64:cG9ldHJ5");
+        assert_eq!(response.headers()["profile-update-interval"], "24");
+        assert_eq!(
+            response.headers()[header::CONTENT_DISPOSITION],
+            "attachment; filename=\"poetry.yaml\"; filename*=UTF-8''poetry.yaml"
+        );
+    }
 
     #[test]
     fn creates_and_resets_admin_credentials() {
