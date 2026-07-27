@@ -388,7 +388,7 @@ async function loadStatus() {
 async function loadConfig() {
   const config = await api("/api/v1/config");
   state.config = config;
-  $("#listen").value = config.listen || "";
+  $("#listen-port").value = listenPort(config.listen) ?? 443;
   $("#certificate").value = config.tls?.certificate || "";
   $("#private-key").value = config.tls?.private_key || "";
   setDetectedAddress("#share-ipv4-server", config.share?.server);
@@ -836,8 +836,9 @@ function collectConfig() {
   const obfsEnabled = $("#obfs-enabled").checked;
   const shareIpv4Server = $("#share-ipv4-server").dataset.address;
   const shareIpv6Server = $("#share-ipv6-server").dataset.address;
+  const listenPortValue = Number($("#listen-port").value);
   return {
-    listen: $("#listen").value.trim(),
+    listen: `[::]:${listenPortValue}`,
     tls: { certificate: $("#certificate").value.trim(), private_key: $("#private-key").value.trim() },
     users: collectUsers(),
     bandwidth: {

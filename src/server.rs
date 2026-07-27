@@ -17,6 +17,7 @@ use rustls::{
     ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject},
 };
+use socket2::{Domain, Protocol, Socket, Type};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpStream, UdpSocket},
@@ -237,12 +238,18 @@ where
 }
 
 fn make_endpoint(server_config: quinn::ServerConfig, config: &Config) -> Result<Endpoint> {
-    let Some(obfs) = &config.obfs else {
-        return Endpoint::server(server_config, config.listen).map_err(Into::into);
-    };
-    let socket = std::net::UdpSocket::bind(config.listen)?;
+    let socket = bind_server_socket(config.listen)?;
     socket.set_nonblocking(true)?;
     let runtime: Arc<dyn Runtime> = Arc::new(TokioRuntime);
+    let Some(obfs) = &config.obfs else {
+        return Endpoint::new(
+            EndpointConfig::default(),
+            Some(server_config),
+            socket,
+            runtime,
+        )
+        .map_err(Into::into);
+    };
     let socket = runtime.wrap_udp_socket(socket)?;
     let socket = Arc::new(SalamanderSocket::new(socket, obfs.password.as_bytes()));
     Endpoint::new_with_abstract_socket(
@@ -252,6 +259,17 @@ fn make_endpoint(server_config: quinn::ServerConfig, config: &Config) -> Result<
         runtime,
     )
     .map_err(Into::into)
+}
+
+fn bind_server_socket(listen: std::net::SocketAddr) -> std::io::Result<std::net::UdpSocket> {
+    if listen.is_ipv6() && listen.ip().is_unspecified() {
+        let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
+        socket.set_only_v6(false)?;
+        socket.bind(&listen.into())?;
+        Ok(socket.into())
+    } else {
+        std::net::UdpSocket::bind(listen)
+    }
 }
 
 fn make_server_config(
@@ -798,6 +816,21 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ipv6_wildcard_socket_accepts_ipv4_packets() {
+        let receiver = bind_server_socket("[::]:0".parse().unwrap()).unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let port = receiver.local_addr().unwrap().port();
+        let sender = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        sender.send_to(b"dual-stack", ("127.0.0.1", port)).unwrap();
+
+        let mut buffer = [0_u8; 16];
+        let (received, _) = receiver.recv_from(&mut buffer).unwrap();
+        assert_eq!(&buffer[..received], b"dual-stack");
+    }
 
     #[test]
     fn traffic_registry_tracks_users_and_preserves_existing_counters() {

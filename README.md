@@ -69,6 +69,9 @@ Open `http://server-address:9080` and sign in as `admin` with the generated
 password.
 The UI provides runtime status, typed configuration editing, atomic saves, and
 HY2 service reloads without restarting the management process.
+The listener is configured as a port in the WebUI and saved as `[::]:<port>`;
+the UDP socket explicitly enables dual-stack mode so the same port accepts
+both IPv4 and IPv6 traffic.
 
 The service page also detects OpenRC or systemd and can install or update the
 `sing-box-ser-mini` boot service from the WebUI. The generated service preserves
