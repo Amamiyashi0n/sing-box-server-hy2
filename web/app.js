@@ -19,6 +19,7 @@ const state = {
   adminUsers: [],
   trafficSamples: new Map(),
   trafficHistory: [],
+  networkCapabilities: null,
   shareShortLinks: new Map(),
   shareShortLinkErrors: new Map(),
   shareShortLinksPending: new Set(),
@@ -359,6 +360,42 @@ function setDetectedAddress(selector, value) {
   target.textContent = address || "未检测到";
 }
 
+function networkScopeLabel(scope) {
+  return { public: "公网", private: "私网", local: "本地", unavailable: "未检测到" }[scope] || "未知";
+}
+
+function renderNetworkCapabilities(capabilities) {
+  state.networkCapabilities = capabilities;
+  const ipv4Address = capabilities.ipv4_address || "";
+  const ipv6Address = capabilities.ipv6_address || "";
+  $("#ipv4-outbound-status").textContent = capabilities.ipv4_outbound
+    ? `可用 · ${networkScopeLabel(capabilities.ipv4_scope)}${ipv4Address ? ` ${ipv4Address}` : ""}`
+    : "不可用";
+  $("#ipv6-outbound-status").textContent = capabilities.ipv6_outbound
+    ? `可用 · ${networkScopeLabel(capabilities.ipv6_scope)}${ipv6Address ? ` ${ipv6Address}` : ""}`
+    : "不可用";
+  const message = $("#network-capability-message");
+  message.textContent = capabilities.message;
+  message.classList.toggle("warning", !capabilities.ipv6_to_ipv4_available);
+  const button = $("#enable-ipv6-to-ipv4");
+  button.disabled = !capabilities.ipv6_to_ipv4_available;
+  button.title = capabilities.ipv6_to_ipv4_available ? "" : capabilities.message;
+  $("#outbound-mode option[value='ipv4_only']").disabled = !capabilities.ipv4_outbound;
+  $("#outbound-mode option[value='ipv6_only']").disabled = !capabilities.ipv6_outbound;
+}
+
+async function loadNetworkCapabilities() {
+  try {
+    renderNetworkCapabilities(await api("/api/v1/network-capabilities"));
+  } catch (error) {
+    $("#ipv4-outbound-status").textContent = "检测失败";
+    $("#ipv6-outbound-status").textContent = "检测失败";
+    $("#network-capability-message").textContent = error.message;
+    $("#network-capability-message").classList.add("warning");
+    $("#enable-ipv6-to-ipv4").disabled = true;
+  }
+}
+
 async function loadStatus() {
   try {
     const status = await api("/api/v1/status");
@@ -405,6 +442,7 @@ async function loadConfig() {
   $("#ignore-bandwidth").checked = Boolean(config.bandwidth?.ignore_client_bandwidth);
   $("#udp-enabled").checked = config.udp?.enabled !== false;
   $("#udp-timeout").value = config.udp?.timeout_secs ?? 300;
+  $("#outbound-mode").value = config.outbound?.mode || "prefer_ipv4";
   $("#obfs-enabled").checked = Boolean(config.obfs);
   $("#obfs-password").value = config.obfs?.password || "";
   toggleObfs();
@@ -849,6 +887,7 @@ function collectConfig() {
       ignore_client_bandwidth: $("#ignore-bandwidth").checked
     },
     udp: { enabled: $("#udp-enabled").checked, timeout_secs: Number($("#udp-timeout").value) },
+    outbound: { mode: $("#outbound-mode").value },
     obfs: obfsEnabled ? { type: "salamander", password: $("#obfs-password").value } : null,
     masquerade: collectMasquerade(),
     share: shareIpv4Server || shareIpv6Server ? {
@@ -903,11 +942,25 @@ async function reloadService() {
   finally { button.disabled = false; }
 }
 
+async function enableIpv6ToIpv4() {
+  const capabilities = state.networkCapabilities;
+  if (!capabilities?.ipv6_to_ipv4_available) {
+    toast(capabilities?.message || "当前网络条件不支持此模式", true);
+    return;
+  }
+  const button = $("#enable-ipv6-to-ipv4");
+  button.disabled = true;
+  $("#outbound-mode").value = "ipv4_only";
+  await saveConfig();
+  button.disabled = false;
+}
+
 function bindEvents() {
   $("#config-form").addEventListener("submit", saveConfig);
   $("#save").addEventListener("click", saveConfig);
   $("#reload").addEventListener("click", reloadService);
   $("#startup-action").addEventListener("click", manageStartup);
+  $("#enable-ipv6-to-ipv4").addEventListener("click", enableIpv6ToIpv4);
   $("#add-user").addEventListener("click", addUser);
   $("#obfs-enabled").addEventListener("change", toggleObfs);
   $("#show-passwords").addEventListener("change", applyPasswordVisibility);
@@ -1009,7 +1062,7 @@ function bindEvents() {
     $("#login-error").classList.add("hidden");
     try {
       await createAdminSession(username, password);
-      await Promise.all([loadConfig(), loadAdminUsers(), loadStartup()]);
+      await Promise.all([loadConfig(), loadAdminUsers(), loadStartup(), loadNetworkCapabilities()]);
       closeLoginScreen();
       await loadStatus();
       startStatusPolling();
@@ -1034,7 +1087,7 @@ async function initialize() {
   activatePage(pageFromHash(), false);
   if (state.username && state.sessionExpiresAt * 1000 > Date.now()) {
     try {
-      await Promise.all([loadConfig(), loadAdminUsers(), loadStartup()]);
+      await Promise.all([loadConfig(), loadAdminUsers(), loadStartup(), loadNetworkCapabilities()]);
       closeLoginScreen();
       await loadStatus();
       startStatusPolling();

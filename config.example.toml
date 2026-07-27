@@ -17,6 +17,9 @@ ignore_client_bandwidth = false
 enabled = true
 timeout_secs = 300
 
+[outbound]
+mode = "prefer_ipv4" # prefer_ipv4, ipv4_only, or ipv6_only
+
 # Optional metadata used to generate client sharing links in the WebUI.
 # [share]
 # server = "hy2.example.com"

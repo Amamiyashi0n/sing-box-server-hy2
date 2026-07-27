@@ -80,6 +80,14 @@ management listen address, optional token file, runtime user, and worker count.
 Installation uses root directly or a non-interactive `doas`/`sudo` policy; it
 enables or removes the boot service without restarting the running process.
 
+The outbound network section detects IPv4 and IPv6 connectivity separately.
+`prefer_ipv4` tries IPv4 destinations first with IPv6 fallback, while
+`ipv4_only` and `ipv6_only` strictly filter TCP and UDP forwarding. When the
+host has a public IPv6 address and a working IPv4 exit, the WebUI can apply
+IPv6 ingress with IPv4 egress in one action. The action remains unavailable on
+an IPv6-only host because IPv4-only websites require an external translation
+service.
+
 ## Subscription converter
 
 The WebUI includes a Rust-native subscription converter on the same management

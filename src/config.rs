@@ -13,9 +13,27 @@ pub struct Config {
     pub bandwidth: Bandwidth,
     #[serde(default)]
     pub udp: UdpConfig,
+    #[serde(default)]
+    pub outbound: OutboundConfig,
     pub obfs: Option<ObfsConfig>,
     pub masquerade: Option<MasqueradeConfig>,
     pub share: Option<ShareConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OutboundMode {
+    #[default]
+    PreferIpv4,
+    Ipv4Only,
+    Ipv6Only,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutboundConfig {
+    #[serde(default)]
+    pub mode: OutboundMode,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -326,5 +344,12 @@ mod tests {
 
         config.share.as_mut().unwrap().blacklist = vec!["https://example.com/path".to_owned()];
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn legacy_config_prefers_ipv4_outbound() {
+        let config = base_config();
+        assert_eq!(config.outbound.mode, OutboundMode::PreferIpv4);
+        assert!(config.to_toml().unwrap().contains("mode = \"prefer_ipv4\""));
     }
 }

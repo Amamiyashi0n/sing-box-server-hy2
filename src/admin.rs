@@ -30,7 +30,7 @@ use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tracing::{info, warn};
 
 use crate::{
-    config::Config,
+    config::{Config, OutboundMode},
     server,
     startup::{self, StartupInputs, StartupStatus},
     sublink::SublinkService,
@@ -119,6 +119,19 @@ struct UserTrafficResponse {
 #[derive(Serialize)]
 struct HealthResponse {
     status: &'static str,
+}
+
+#[derive(Serialize)]
+struct NetworkCapabilitiesResponse {
+    ipv4_address: Option<Ipv4Addr>,
+    ipv6_address: Option<Ipv6Addr>,
+    ipv4_scope: &'static str,
+    ipv6_scope: &'static str,
+    ipv4_outbound: bool,
+    ipv6_outbound: bool,
+    public_ipv6: bool,
+    ipv6_to_ipv4_available: bool,
+    message: String,
 }
 
 #[derive(Serialize)]
@@ -320,6 +333,7 @@ fn router(state: AdminState) -> Router {
         .route("/api/v1/login", post(login))
         .route("/api/v1/logout", post(logout))
         .route("/api/v1/status", get(status))
+        .route("/api/v1/network-capabilities", get(network_capabilities))
         .route("/api/v1/config", get(get_config).put(put_config))
         .route("/api/v1/reload", post(reload))
         .route(
@@ -480,6 +494,53 @@ async fn status(
     }))
 }
 
+async fn network_capabilities(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<NetworkCapabilitiesResponse>> {
+    authorize(&state, &headers).await?;
+    let ipv4_address = probe_ipv4_route();
+    let ipv6_address = probe_ipv6_route();
+    let ipv4_probes = [
+        "1.1.1.1:443".parse().expect("static IPv4 address"),
+        "8.8.8.8:443".parse().expect("static IPv4 address"),
+    ];
+    let ipv6_probes = [
+        "[2606:4700:4700::1111]:443"
+            .parse()
+            .expect("static IPv6 address"),
+        "[2001:4860:4860::8888]:443"
+            .parse()
+            .expect("static IPv6 address"),
+    ];
+    let (ipv4_outbound, ipv6_outbound) = tokio::join!(
+        probe_tcp_connectivity(&ipv4_probes),
+        probe_tcp_connectivity(&ipv6_probes),
+    );
+    let public_ipv6 = ipv6_address.is_some_and(is_public_ipv6);
+    let ipv6_to_ipv4_available = public_ipv6 && ipv4_outbound;
+    let message = if ipv6_to_ipv4_available {
+        "可启用 IPv6 入站 / IPv4 出站".to_owned()
+    } else if !public_ipv6 && ipv6_outbound && !ipv4_outbound {
+        "当前设备仅检测到 IPv6 出口，无法启用 IPv6 入站 / IPv4 出站".to_owned()
+    } else if !public_ipv6 {
+        "未检测到公网 IPv6 入站地址".to_owned()
+    } else {
+        "未检测到可用 IPv4 出口，无法将 IPv6 入站流量转发到 IPv4".to_owned()
+    };
+    Ok(Json(NetworkCapabilitiesResponse {
+        ipv4_address,
+        ipv6_address,
+        ipv4_scope: ipv4_address.map_or("unavailable", ipv4_scope),
+        ipv6_scope: ipv6_address.map_or("unavailable", ipv6_scope),
+        ipv4_outbound,
+        ipv6_outbound,
+        public_ipv6,
+        ipv6_to_ipv4_available,
+        message,
+    }))
+}
+
 async fn get_config(
     State(state): State<AdminState>,
     headers: HeaderMap,
@@ -505,6 +566,19 @@ async fn put_config(
     authorize(&state, &headers).await?;
     apply_auto_share_addresses(&mut config);
     config.validate().map_err(ApiError::bad_request)?;
+    match config.outbound.mode {
+        OutboundMode::Ipv4Only if probe_ipv4_route().is_none() => {
+            return Err(ApiError::bad_request(
+                "IPv4-only outbound requires an available IPv4 route",
+            ));
+        }
+        OutboundMode::Ipv6Only if probe_ipv6_route().is_none() => {
+            return Err(ApiError::bad_request(
+                "IPv6-only outbound requires an available IPv6 route",
+            ));
+        }
+        _ => {}
+    }
     let _guard = state.write_lock.lock().await;
     let path = Arc::clone(&state.config_path);
     tokio::task::spawn_blocking(move || config.save_atomic(&path))
@@ -1065,6 +1139,58 @@ fn probe_ipv6_route() -> Option<Ipv6Addr> {
     }
 }
 
+async fn probe_tcp_connectivity(addresses: &[SocketAddr]) -> bool {
+    for address in addresses {
+        if tokio::time::timeout(
+            std::time::Duration::from_millis(1200),
+            tokio::net::TcpStream::connect(address),
+        )
+        .await
+        .is_ok_and(|result| result.is_ok())
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn ipv4_scope(address: Ipv4Addr) -> &'static str {
+    let octets = address.octets();
+    let carrier_nat = octets[0] == 100 && (64..=127).contains(&octets[1]);
+    let documentation = (octets[0] == 192 && octets[1] == 0 && octets[2] == 2)
+        || (octets[0] == 198 && octets[1] == 51 && octets[2] == 100)
+        || (octets[0] == 203 && octets[1] == 0 && octets[2] == 113);
+    if address.is_private() || address.is_link_local() || carrier_nat || documentation {
+        "private"
+    } else if address.is_loopback() || address.is_unspecified() {
+        "local"
+    } else {
+        "public"
+    }
+}
+
+fn is_public_ipv6(address: Ipv6Addr) -> bool {
+    let segments = address.segments();
+    !(address.is_unspecified()
+        || address.is_loopback()
+        || address.is_multicast()
+        || (segments[0] & 0xfe00) == 0xfc00
+        || (segments[0] & 0xffc0) == 0xfe80
+        || (segments[0] == 0x2001 && segments[1] == 0x0db8))
+}
+
+fn ipv6_scope(address: Ipv6Addr) -> &'static str {
+    if is_public_ipv6(address) {
+        "public"
+    } else if (address.segments()[0] & 0xfe00) == 0xfc00
+        || (address.segments()[0] & 0xffc0) == 0xfe80
+    {
+        "private"
+    } else {
+        "local"
+    }
+}
+
 fn decode_basic_credentials(authorization: &str) -> Option<(Vec<u8>, Vec<u8>)> {
     let encoded = authorization.strip_prefix("Basic ")?;
     let decoded = STANDARD.decode(encoded).ok()?;
@@ -1361,5 +1487,16 @@ mod tests {
         assert_eq!(ipv4_addresses.ipv6, None);
         assert_eq!(ipv6_addresses.ipv4, None);
         assert_eq!(ipv6_addresses.ipv6, Some("2001:db8::10".parse().unwrap()));
+    }
+
+    #[test]
+    fn network_address_scopes_distinguish_public_and_private_routes() {
+        assert_eq!(ipv4_scope("192.168.1.20".parse().unwrap()), "private");
+        assert_eq!(ipv4_scope("100.64.1.20".parse().unwrap()), "private");
+        assert_eq!(ipv4_scope("8.8.8.8".parse().unwrap()), "public");
+        assert_eq!(ipv6_scope("fd00::20".parse().unwrap()), "private");
+        assert_eq!(ipv6_scope("fe80::20".parse().unwrap()), "private");
+        assert!(!is_public_ipv6("2001:db8::20".parse().unwrap()));
+        assert!(is_public_ipv6("2606:4700:4700::1111".parse().unwrap()));
     }
 }

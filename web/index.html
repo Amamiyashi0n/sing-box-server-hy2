@@ -131,6 +131,27 @@
           <div class="field-grid two conditional hidden" id="obfs-fields">
             <label class="field"><span>Salamander 密码</span><input id="obfs-password" type="password"></label>
           </div>
+          <div class="outbound-settings" aria-labelledby="outbound-title">
+            <div class="outbound-heading">
+              <div>
+                <h3 id="outbound-title">出口网络</h3>
+                <p>客户端可通过公网 IPv6 连接，网站流量按所选地址族从服务器转发。</p>
+              </div>
+              <button class="button secondary compact" id="enable-ipv6-to-ipv4" type="button" disabled>启用 IPv6 入站 / IPv4 出站</button>
+            </div>
+            <div class="outbound-grid">
+              <label class="field"><span>网站访问方式</span>
+                <select id="outbound-mode">
+                  <option value="prefer_ipv4">IPv4 优先（推荐）</option>
+                  <option value="ipv4_only">仅 IPv4</option>
+                  <option value="ipv6_only">仅 IPv6</option>
+                </select>
+              </label>
+              <div class="display-field"><span>IPv4 出口</span><strong id="ipv4-outbound-status">检测中</strong></div>
+              <div class="display-field"><span>IPv6 出口</span><strong id="ipv6-outbound-status">检测中</strong></div>
+            </div>
+            <p class="network-capability-message" id="network-capability-message" role="status">正在检测网络能力</p>
+          </div>
         </section>
 
         <section class="config-section" id="masquerade" aria-labelledby="masquerade-title">

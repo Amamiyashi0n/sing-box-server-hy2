@@ -142,6 +142,13 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.5; }
 .check input { width: 16px; min-height: 16px; accent-color: #d5d5d5; }
 .conditional, .share-settings { margin-top: 17px; padding-top: 17px; border-top: 1px solid var(--line-soft); }
 .share-insecure { align-self: end; padding-bottom: 6px; }
+.outbound-settings { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--line-soft); }
+.outbound-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.outbound-heading h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.outbound-heading p { margin: 5px 0 0; color: var(--subtle); font-size: 11px; line-height: 1.5; }
+.outbound-grid { display: grid; grid-template-columns: minmax(180px, .72fr) repeat(2, minmax(0, 1fr)); gap: 14px; align-items: end; margin-top: 16px; }
+.network-capability-message { min-height: 18px; margin: 10px 0 0; color: var(--subtle); font-size: 11px; line-height: 1.5; }
+.network-capability-message.warning { color: #e6b87a; }
 
 .user-list { display: grid; gap: 8px; }
 .user-row { display: grid; grid-template-columns: minmax(150px, .75fr) minmax(240px, 1.4fr) auto; gap: 10px; align-items: end; padding: 12px; border-radius: 8px; background: var(--surface); }
@@ -242,6 +249,9 @@ dialog::backdrop { background: rgba(0, 0, 0, .7); }
   .traffic-user { grid-column: 1 / -1; }
   .field-grid.two, .field-grid.three, .field-grid.four { grid-template-columns: 1fr; }
   .network-primary-grid { grid-template-columns: 1fr; }
+  .outbound-heading { align-items: flex-start; flex-direction: column; }
+  .outbound-heading .button { width: 100%; white-space: normal; }
+  .outbound-grid { grid-template-columns: 1fr; }
   .masquerade-mode-row { width: 100%; }
   .masquerade-string-grid { grid-template-columns: 1fr; }
   .masquerade-string-grid textarea { min-height: 128px; }

@@ -1,6 +1,8 @@
 use std::{
     collections::{HashMap, HashSet},
     future::{Future, IntoFuture, pending},
+    io,
+    net::SocketAddr,
     sync::{
         Arc, Mutex as StdMutex, OnceLock, RwLock as StdRwLock, Weak,
         atomic::{AtomicU16, AtomicU64, Ordering},
@@ -27,7 +29,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     brutal::Hy2CongestionConfig,
-    config::{Config, MasqueradeConfig},
+    config::{Config, MasqueradeConfig, OutboundMode},
     masquerade,
     protocol::{
         FRAME_TYPE_TCP_REQUEST, HEADER_CC_RX, REQUEST_HEADER_AUTH, STATUS_AUTH_OK, TcpRequest,
@@ -196,6 +198,7 @@ where
         let receive_auto =
             config.bandwidth.ignore_client_bandwidth && config.bandwidth.down_mbps == 0;
         let masquerade = config.masquerade.clone();
+        let outbound_mode = config.outbound.mode;
         tokio::spawn(async move {
             let connection = match match connection {
                 Some(connection) => connection,
@@ -224,7 +227,8 @@ where
                     let traffic = traffic.user(&user);
                     let _active_connection = traffic.connection();
                     if let Err(error) =
-                        serve_connection(session, udp_enabled, udp_timeout, traffic).await
+                        serve_connection(session, udp_enabled, udp_timeout, outbound_mode, traffic)
+                            .await
                     {
                         warn!(%remote, %error, "HY2 connection closed during TCP relay");
                     }
@@ -462,7 +466,11 @@ struct AuthenticatedSession {
     h3: H3Connection<h3_quinn::Connection, Bytes>,
 }
 
-async fn serve_tcp_streams(connection: quinn::Connection, traffic: Arc<UserTraffic>) -> Result<()> {
+async fn serve_tcp_streams(
+    connection: quinn::Connection,
+    outbound_mode: OutboundMode,
+    traffic: Arc<UserTraffic>,
+) -> Result<()> {
     loop {
         let (send, recv) = match connection.accept_bi().await {
             Ok(streams) => streams,
@@ -475,7 +483,7 @@ async fn serve_tcp_streams(connection: quinn::Connection, traffic: Arc<UserTraff
         };
         let traffic = Arc::clone(&traffic);
         tokio::spawn(async move {
-            if let Err(error) = relay_tcp_stream(send, recv, traffic).await {
+            if let Err(error) = relay_tcp_stream(send, recv, outbound_mode, traffic).await {
                 if is_peer_stream_close(&error) {
                     debug!(%error, "HY2 TCP stream closed by peer");
                 } else {
@@ -490,6 +498,7 @@ async fn serve_connection(
     session: AuthenticatedSession,
     udp_enabled: bool,
     udp_timeout: Duration,
+    outbound_mode: OutboundMode,
     traffic: Arc<UserTraffic>,
 ) -> Result<()> {
     let AuthenticatedSession {
@@ -497,22 +506,24 @@ async fn serve_connection(
         h3: _h3,
     } = session;
     if !udp_enabled {
-        return serve_tcp_streams(connection, traffic).await;
+        return serve_tcp_streams(connection, outbound_mode, traffic).await;
     }
-    let tcp = serve_tcp_streams(connection.clone(), Arc::clone(&traffic));
-    let udp = serve_udp_datagrams(connection, udp_timeout, traffic);
+    let tcp = serve_tcp_streams(connection.clone(), outbound_mode, Arc::clone(&traffic));
+    let udp = serve_udp_datagrams(connection, udp_timeout, outbound_mode, traffic);
     tokio::try_join!(tcp, udp)?;
     Ok(())
 }
 
 struct UdpSession {
     socket: Arc<UdpSocket>,
+    ipv4: bool,
     next_packet_id: AtomicU16,
 }
 
 async fn serve_udp_datagrams(
     connection: quinn::Connection,
     udp_timeout: Duration,
+    outbound_mode: OutboundMode,
     traffic: Arc<UserTraffic>,
 ) -> Result<()> {
     let mut sessions = HashMap::<u32, Arc<UdpSession>>::new();
@@ -550,18 +561,29 @@ async fn serve_udp_datagrams(
         else {
             continue;
         };
+        let addresses = resolve_outbound_addresses(&message.destination, outbound_mode).await?;
         let session = get_udp_session(
             &mut sessions,
             &connection,
             message.session_id,
+            addresses[0],
             udp_timeout,
             &expiration_tx,
             &traffic,
         )
         .await?;
+        let destination = addresses
+            .into_iter()
+            .find(|address| address.is_ipv4() == session.ipv4)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "UDP session address family changed for {}",
+                    message.destination
+                )
+            })?;
         session
             .socket
-            .send_to(&message.payload, &message.destination)
+            .send_to(&message.payload, destination)
             .await
             .with_context(|| format!("send UDP packet to {}", message.destination))?;
         traffic.record_upload(message.payload.len());
@@ -572,6 +594,7 @@ async fn get_udp_session(
     sessions: &mut HashMap<u32, Arc<UdpSession>>,
     connection: &quinn::Connection,
     session_id: u32,
+    destination: SocketAddr,
     udp_timeout: Duration,
     expiration_tx: &mpsc::UnboundedSender<(u32, Weak<UdpSession>)>,
     traffic: &Arc<UserTraffic>,
@@ -579,13 +602,15 @@ async fn get_udp_session(
     if let Some(session) = sessions.get(&session_id).cloned() {
         return Ok(session);
     }
+    let ipv4 = destination.is_ipv4();
     let socket = Arc::new(
-        UdpSocket::bind("[::]:0")
+        UdpSocket::bind(if ipv4 { "0.0.0.0:0" } else { "[::]:0" })
             .await
             .context("bind UDP session socket")?,
     );
     let session = Arc::new(UdpSession {
         socket: Arc::clone(&socket),
+        ipv4,
         next_packet_id: AtomicU16::new(0),
     });
     sessions.insert(session_id, Arc::clone(&session));
@@ -641,6 +666,7 @@ async fn get_udp_session(
 async fn relay_tcp_stream(
     mut send: quinn::SendStream,
     mut recv: quinn::RecvStream,
+    outbound_mode: OutboundMode,
     traffic: Arc<UserTraffic>,
 ) -> Result<()> {
     let frame_type = read_varint(&mut recv).await?;
@@ -648,7 +674,7 @@ async fn relay_tcp_stream(
         bail!("unexpected HY2 stream frame type {frame_type:#x}");
     }
     let request = read_tcp_request(&mut recv).await?;
-    let mut upstream = match TcpStream::connect(&request.destination).await {
+    let mut upstream = match connect_tcp(&request.destination, outbound_mode).await {
         Ok(stream) => stream,
         Err(error) => {
             let response = TcpResponse {
@@ -696,6 +722,63 @@ async fn relay_tcp_stream(
     };
     tokio::try_join!(to_upstream, from_upstream)?;
     Ok(())
+}
+
+async fn connect_tcp(destination: &str, mode: OutboundMode) -> io::Result<TcpStream> {
+    let addresses = resolve_outbound_addresses(destination, mode).await?;
+    let mut last_error = None;
+    for address in addresses {
+        match TcpStream::connect(address).await {
+            Ok(stream) => return Ok(stream),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::AddrNotAvailable,
+            "no usable destination address",
+        )
+    }))
+}
+
+async fn resolve_outbound_addresses(
+    destination: &str,
+    mode: OutboundMode,
+) -> io::Result<Vec<SocketAddr>> {
+    let addresses = tokio::net::lookup_host(destination)
+        .await?
+        .collect::<Vec<_>>();
+    let addresses = order_outbound_addresses(addresses, mode);
+    if addresses.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::AddrNotAvailable,
+            format!("no address matching outbound mode for {destination}"),
+        ));
+    }
+    Ok(addresses)
+}
+
+fn order_outbound_addresses(addresses: Vec<SocketAddr>, mode: OutboundMode) -> Vec<SocketAddr> {
+    let mut ipv4 = Vec::new();
+    let mut ipv6 = Vec::new();
+    for address in addresses {
+        let target = if address.is_ipv4() {
+            &mut ipv4
+        } else {
+            &mut ipv6
+        };
+        if !target.contains(&address) {
+            target.push(address);
+        }
+    }
+    match mode {
+        OutboundMode::PreferIpv4 => {
+            ipv4.extend(ipv6);
+            ipv4
+        }
+        OutboundMode::Ipv4Only => ipv4,
+        OutboundMode::Ipv6Only => ipv6,
+    }
 }
 
 async fn read_tcp_request(recv: &mut quinn::RecvStream) -> Result<TcpRequest> {
@@ -816,6 +899,25 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outbound_address_modes_filter_and_prefer_ipv4() {
+        let ipv4: SocketAddr = "192.0.2.10:443".parse().unwrap();
+        let ipv6: SocketAddr = "[2001:db8::10]:443".parse().unwrap();
+
+        assert_eq!(
+            order_outbound_addresses(vec![ipv6, ipv4], OutboundMode::PreferIpv4),
+            vec![ipv4, ipv6]
+        );
+        assert_eq!(
+            order_outbound_addresses(vec![ipv6, ipv4], OutboundMode::Ipv4Only),
+            vec![ipv4]
+        );
+        assert_eq!(
+            order_outbound_addresses(vec![ipv4, ipv6], OutboundMode::Ipv6Only),
+            vec![ipv6]
+        );
+    }
 
     #[test]
     fn ipv6_wildcard_socket_accepts_ipv4_packets() {

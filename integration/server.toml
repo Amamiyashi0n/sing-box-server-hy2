@@ -17,6 +17,9 @@ ignore_client_bandwidth = false
 enabled = true
 timeout_secs = 30
 
+[outbound]
+mode = "prefer_ipv4"
+
 [masquerade]
 type = "string"
 status_code = 200
