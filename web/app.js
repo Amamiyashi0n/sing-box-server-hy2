@@ -18,6 +18,7 @@ const state = {
   timer: null,
   adminUsers: [],
   trafficSamples: new Map(),
+  trafficHistory: [],
   shareShortLinks: new Map(),
   shareShortLinkErrors: new Map(),
   shareShortLinksPending: new Set(),
@@ -148,6 +149,7 @@ function activatePage(page, updateHash = true) {
   $("#page-title").textContent = PAGE_TITLES[activePage];
   $("#save").classList.toggle("hidden", !["service", "users"].includes(activePage));
   if (updateHash && window.location.hash !== `#${activePage}`) history.replaceState(null, "", `#${activePage}`);
+  if (activePage === "overview") requestAnimationFrame(drawTrafficChart);
 }
 
 function toast(message, error = false) {
@@ -205,6 +207,93 @@ function formatBytes(value) {
   return `${amount.toFixed(digits)} ${units[unit]}`;
 }
 
+function drawTrafficChart() {
+  const canvas = $("#traffic-chart-canvas");
+  const bounds = canvas.getBoundingClientRect();
+  if (bounds.width < 1 || bounds.height < 1) return;
+  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  const width = Math.round(bounds.width);
+  const height = Math.round(bounds.height);
+  const pixelWidth = Math.round(width * ratio);
+  const pixelHeight = Math.round(height * ratio);
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+  }
+  const context = canvas.getContext("2d");
+  context.setTransform(ratio, 0, 0, ratio, 0, 0);
+  context.clearRect(0, 0, width, height);
+
+  const styles = getComputedStyle(document.documentElement);
+  const gridColor = styles.getPropertyValue("--line").trim();
+  const textColor = styles.getPropertyValue("--subtle").trim();
+  const uploadColor = styles.getPropertyValue("--status").trim();
+  const downloadColor = styles.getPropertyValue("--red").trim();
+  const plot = { left: 48, right: width - 8, top: 8, bottom: height - 8 };
+  const plotWidth = Math.max(plot.right - plot.left, 1);
+  const plotHeight = Math.max(plot.bottom - plot.top, 1);
+  const peak = Math.max(
+    1024,
+    ...state.trafficHistory.flatMap(sample => [sample.upload, sample.download])
+  );
+  const maximum = peak * 1.12;
+
+  context.lineWidth = 1;
+  context.font = '9px Inter, ui-sans-serif, system-ui, sans-serif';
+  context.textAlign = "right";
+  context.textBaseline = "middle";
+  for (let index = 0; index <= 3; index += 1) {
+    const y = plot.top + (plotHeight * index) / 3;
+    const value = maximum * (1 - index / 3);
+    context.strokeStyle = gridColor;
+    context.beginPath();
+    context.moveTo(plot.left, y);
+    context.lineTo(plot.right, y);
+    context.stroke();
+    context.fillStyle = textColor;
+    context.fillText(`${formatBytes(value)}/s`, plot.left - 6, y);
+  }
+
+  const now = Date.now();
+  const windowStart = now - 5 * 60 * 1000;
+  const drawLine = (key, color) => {
+    context.strokeStyle = color;
+    context.lineWidth = 1.8;
+    context.lineJoin = "round";
+    context.lineCap = "round";
+    context.beginPath();
+    state.trafficHistory.forEach((sample, index) => {
+      const x = plot.left + Math.max(0, Math.min(1, (sample.at - windowStart) / (now - windowStart))) * plotWidth;
+      const y = plot.bottom - Math.min(sample[key] / maximum, 1) * plotHeight;
+      if (index === 0) context.moveTo(x, y);
+      else context.lineTo(x, y);
+    });
+    context.stroke();
+    const latest = state.trafficHistory[state.trafficHistory.length - 1];
+    if (latest) {
+      const x = plot.left + Math.max(0, Math.min(1, (latest.at - windowStart) / (now - windowStart))) * plotWidth;
+      const y = plot.bottom - Math.min(latest[key] / maximum, 1) * plotHeight;
+      context.fillStyle = color;
+      context.beginPath();
+      context.arc(x, y, 2.5, 0, Math.PI * 2);
+      context.fill();
+    }
+  };
+  drawLine("upload", uploadColor);
+  drawLine("download", downloadColor);
+}
+
+function updateTrafficChart(upload, download, now) {
+  state.trafficHistory.push({ upload, download, at: now });
+  const cutoff = now - 5 * 60 * 1000;
+  state.trafficHistory = state.trafficHistory
+    .filter(sample => sample.at >= cutoff)
+    .slice(-61);
+  $("#traffic-upload-rate").textContent = `${formatBytes(upload)}/s`;
+  $("#traffic-download-rate").textContent = `${formatBytes(download)}/s`;
+  drawTrafficChart();
+}
+
 function renderTraffic(users) {
   const target = $("#traffic-list");
   const now = Date.now();
@@ -212,8 +301,11 @@ function renderTraffic(users) {
   if (!users.length) {
     target.innerHTML = '<div class="empty traffic-empty">暂无认证用户</div>';
     state.trafficSamples = nextSamples;
+    updateTrafficChart(0, 0, now);
     return;
   }
+  let totalUploadRate = 0;
+  let totalDownloadRate = 0;
   target.innerHTML = users.map(user => {
     const uploaded = Number(user.uploaded_bytes) || 0;
     const downloaded = Number(user.downloaded_bytes) || 0;
@@ -226,6 +318,8 @@ function renderTraffic(users) {
       ? (downloaded - previous.downloaded) / elapsed
       : 0;
     const active = Number(user.active_connections) || 0;
+    totalUploadRate += uploadRate;
+    totalDownloadRate += downloadRate;
     nextSamples.set(user.username, { uploaded, downloaded, at: now });
     return `
       <div class="traffic-row">
@@ -245,6 +339,7 @@ function renderTraffic(users) {
     `;
   }).join("");
   state.trafficSamples = nextSamples;
+  updateTrafficChart(totalUploadRate, totalDownloadRate, now);
 }
 
 function listenAddressPair(value) {
@@ -878,6 +973,7 @@ function bindEvents() {
     activatePage(link.dataset.page);
   }));
   window.addEventListener("hashchange", () => activatePage(pageFromHash(), false));
+  window.addEventListener("resize", () => requestAnimationFrame(drawTrafficChart));
 }
 
 async function initialize() {
