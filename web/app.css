@@ -163,7 +163,10 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.5; }
 .share-link-line { min-width: 0; display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; gap: 8px; align-items: center; }
 .share-link-line > span { color: var(--subtle); font-size: 11px; }
 .share-link-line input { min-width: 0; background: #232323; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
+.masquerade-mode-row { width: min(420px, 100%); }
 .masquerade-panel { margin-top: 17px; padding-top: 17px; border-top: 1px solid var(--line-soft); }
+.masquerade-string-grid { display: grid; grid-template-columns: minmax(140px, .45fr) repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
+.masquerade-string-grid textarea { min-height: 152px; }
 .admin-user-list { display: grid; gap: 8px; }
 .admin-user-row { display: grid; grid-template-columns: minmax(140px, .7fr) minmax(220px, 1.3fr) auto auto; gap: 9px; align-items: end; padding: 12px; border-radius: 8px; background: var(--surface); }
 .admin-user-name { min-width: 0; min-height: 40px; display: flex; align-items: center; gap: 8px; }
@@ -231,6 +234,9 @@ dialog::backdrop { background: rgba(0, 0, 0, .7); }
   .traffic-row { grid-template-columns: 1fr 1fr; gap: 12px 16px; padding: 14px 0; }
   .traffic-user { grid-column: 1 / -1; }
   .field-grid.two, .field-grid.three, .field-grid.four { grid-template-columns: 1fr; }
+  .masquerade-mode-row { width: 100%; }
+  .masquerade-string-grid { grid-template-columns: 1fr; }
+  .masquerade-string-grid textarea { min-height: 128px; }
   .user-row { grid-template-columns: 1fr; }
   .share-protocol { grid-template-columns: 1fr; gap: 7px; }
   .share-protocol-name { padding-top: 0; }

@@ -765,7 +765,7 @@ function renderMasquerade(type, value = {}) {
   const target = $("#masquerade-fields");
   if (type === "none") { target.innerHTML = ""; return; }
   if (type === "string") {
-    target.innerHTML = `<div class="masquerade-panel field-grid two">
+    target.innerHTML = `<div class="masquerade-panel masquerade-string-grid">
       <label class="field"><span>HTTP 状态码</span><input id="masq-status" type="number" min="100" max="599" value="${value?.status_code ?? 200}"></label>
       <label class="field"><span>响应头 JSON</span><textarea id="masq-headers" spellcheck="false">${escapeHtml(JSON.stringify(value?.headers || { "content-type": ["text/plain; charset=utf-8"] }, null, 2))}</textarea></label>
       <label class="field"><span>响应正文</span><textarea id="masq-content">${escapeHtml(value?.content || "")}</textarea></label>
