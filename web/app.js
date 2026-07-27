@@ -99,6 +99,7 @@ function openLoginScreen(message = "") {
   stopStatusPolling();
   document.body.classList.add("auth-pending");
   $("#login-screen").classList.remove("hidden");
+  document.body.classList.remove("auth-booting");
   if (message || !alreadyVisible) {
     $("#login-error").textContent = message;
     $("#login-error").classList.toggle("hidden", !message);
@@ -112,11 +113,12 @@ function openLoginScreen(message = "") {
 
 function closeLoginScreen() {
   $("#login-screen").classList.add("hidden");
-  document.body.classList.remove("auth-pending");
+  document.body.classList.remove("auth-pending", "auth-booting");
 }
 
 function loginScreenVisible() {
-  return document.body.classList.contains("auth-pending");
+  return document.body.classList.contains("auth-pending")
+    && !document.body.classList.contains("auth-booting");
 }
 
 function startStatusPolling() {
@@ -831,8 +833,10 @@ async function initialize() {
       await loadStatus();
       startStatusPolling();
     } catch (error) {
-      if (!loginScreenVisible()) openLoginScreen(error.message);
+      if (document.body.classList.contains("auth-booting")) openLoginScreen(error.message);
     }
+  } else {
+    openLoginScreen();
   }
 }
 

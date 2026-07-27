@@ -30,6 +30,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .app-shell { min-height: 100vh; display: grid; grid-template-columns: 220px minmax(0, 1fr); }
 .auth-pending .app-shell { display: none; }
 .login-screen { min-height: 100vh; display: grid; place-items: center; padding: 28px; background: var(--bg); }
+.auth-booting .login-screen { visibility: hidden; }
 .login-screen.hidden { display: none; }
 .login-panel { width: min(360px, 100%); }
 .login-panel h1 { margin-bottom: 28px; font-size: 24px; }
