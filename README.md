@@ -81,11 +81,13 @@ Installation uses root directly or a non-interactive `doas`/`sudo` policy; it
 enables or removes the boot service without restarting the running process.
 
 The outbound network section detects IPv4 and IPv6 connectivity separately and
-applies the address-family policy automatically. IPv4 destinations are tried
-first with IPv6 fallback. A host with public IPv6 ingress and a working IPv4
-exit therefore accepts clients over IPv6 while forwarding website traffic over
-IPv4 without a manual switch. An IPv6-only host shows a warning because
-IPv4-only websites require an external translation service.
+selects the automatic policy by default. Automatic mode tries IPv4 destinations
+first with IPv6 fallback; the WebUI also allows an explicit IPv4-only or
+IPv6-only override and disables choices that are currently unavailable. A host
+with public IPv6 ingress and a working IPv4 exit therefore accepts clients over
+IPv6 while forwarding website traffic over IPv4 without setup. An IPv6-only
+host shows a warning because IPv4-only websites require an external translation
+service.
 
 ## Subscription converter
 

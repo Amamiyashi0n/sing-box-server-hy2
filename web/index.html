@@ -139,7 +139,13 @@
               </div>
             </div>
             <div class="outbound-grid">
-              <div class="display-field"><span>网站访问方式</span><strong id="outbound-auto-status">自动检测中</strong></div>
+              <label class="field"><span>网站访问方式</span>
+                <select id="outbound-mode">
+                  <option value="prefer_ipv4">自动选择（推荐）</option>
+                  <option value="ipv4_only">仅 IPv4</option>
+                  <option value="ipv6_only">仅 IPv6</option>
+                </select>
+              </label>
               <div class="display-field"><span>IPv4 出口</span><strong id="ipv4-outbound-status">检测中</strong></div>
               <div class="display-field"><span>IPv6 出口</span><strong id="ipv6-outbound-status">检测中</strong></div>
             </div>

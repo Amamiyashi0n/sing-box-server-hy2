@@ -374,12 +374,11 @@ function renderNetworkCapabilities(capabilities) {
   $("#ipv6-outbound-status").textContent = capabilities.ipv6_outbound
     ? `可用 · ${networkScopeLabel(capabilities.ipv6_scope)}${ipv6Address ? ` ${ipv6Address}` : ""}`
     : "不可用";
-  $("#outbound-auto-status").textContent = capabilities.ipv4_outbound
-    ? "自动 · IPv4 优先"
-    : capabilities.ipv6_outbound ? "自动 · 仅 IPv6 可用" : "无可用出口";
   const message = $("#network-capability-message");
   message.textContent = capabilities.message;
   message.classList.toggle("warning", !capabilities.ipv4_outbound);
+  $("#outbound-mode option[value='ipv4_only']").disabled = !capabilities.ipv4_outbound;
+  $("#outbound-mode option[value='ipv6_only']").disabled = !capabilities.ipv6_outbound;
 }
 
 async function loadNetworkCapabilities() {
@@ -390,7 +389,6 @@ async function loadNetworkCapabilities() {
     $("#ipv6-outbound-status").textContent = "检测失败";
     $("#network-capability-message").textContent = error.message;
     $("#network-capability-message").classList.add("warning");
-    $("#outbound-auto-status").textContent = "检测失败";
   }
 }
 
@@ -440,6 +438,7 @@ async function loadConfig() {
   $("#ignore-bandwidth").checked = Boolean(config.bandwidth?.ignore_client_bandwidth);
   $("#udp-enabled").checked = config.udp?.enabled !== false;
   $("#udp-timeout").value = config.udp?.timeout_secs ?? 300;
+  $("#outbound-mode").value = config.outbound?.mode || "prefer_ipv4";
   $("#obfs-enabled").checked = Boolean(config.obfs);
   $("#obfs-password").value = config.obfs?.password || "";
   toggleObfs();
@@ -884,7 +883,7 @@ function collectConfig() {
       ignore_client_bandwidth: $("#ignore-bandwidth").checked
     },
     udp: { enabled: $("#udp-enabled").checked, timeout_secs: Number($("#udp-timeout").value) },
-    outbound: { mode: "prefer_ipv4" },
+    outbound: { mode: $("#outbound-mode").value },
     obfs: obfsEnabled ? { type: "salamander", password: $("#obfs-password").value } : null,
     masquerade: collectMasquerade(),
     share: shareIpv4Server || shareIpv6Server ? {
