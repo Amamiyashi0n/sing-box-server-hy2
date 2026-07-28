@@ -250,7 +250,6 @@ dialog::backdrop { background: rgba(0, 0, 0, .7); }
   .field-grid.two, .field-grid.three, .field-grid.four { grid-template-columns: 1fr; }
   .network-primary-grid { grid-template-columns: 1fr; }
   .outbound-heading { align-items: flex-start; flex-direction: column; }
-  .outbound-heading .button { width: 100%; white-space: normal; }
   .outbound-grid { grid-template-columns: 1fr; }
   .masquerade-mode-row { width: 100%; }
   .masquerade-string-grid { grid-template-columns: 1fr; }

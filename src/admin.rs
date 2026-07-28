@@ -520,13 +520,15 @@ async fn network_capabilities(
     let public_ipv6 = ipv6_address.is_some_and(is_public_ipv6);
     let ipv6_to_ipv4_available = public_ipv6 && ipv4_outbound;
     let message = if ipv6_to_ipv4_available {
-        "可启用 IPv6 入站 / IPv4 出站".to_owned()
-    } else if !public_ipv6 && ipv6_outbound && !ipv4_outbound {
-        "当前设备仅检测到 IPv6 出口，无法启用 IPv6 入站 / IPv4 出站".to_owned()
-    } else if !public_ipv6 {
-        "未检测到公网 IPv6 入站地址".to_owned()
+        "已自动使用公网 IPv6 入站，并优先通过 IPv4 转发网站流量".to_owned()
+    } else if ipv4_outbound && ipv6_outbound {
+        "已自动优先使用 IPv4 出口，IPv4 不可用时回退 IPv6".to_owned()
+    } else if ipv4_outbound {
+        "已自动使用 IPv4 出口".to_owned()
+    } else if ipv6_outbound {
+        "当前仅有 IPv6 出口，无法访问仅支持 IPv4 的网站".to_owned()
     } else {
-        "未检测到可用 IPv4 出口，无法将 IPv6 入站流量转发到 IPv4".to_owned()
+        "未检测到可用的 IPv4 或 IPv6 出口".to_owned()
     };
     Ok(Json(NetworkCapabilitiesResponse {
         ipv4_address,
