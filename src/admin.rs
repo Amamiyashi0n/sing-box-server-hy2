@@ -1118,7 +1118,7 @@ fn merge_auto_ipv6_address(existing: &str, detected: Option<Ipv6Addr>) -> String
         .ok()
         .is_some_and(is_public_ipv6);
     match detected {
-        Some(address) if is_public_ipv6(address) || !existing_public => address.to_string(),
+        Some(address) if is_public_ipv6(address) => address.to_string(),
         _ if existing_public => existing.to_owned(),
         _ => String::new(),
     }
@@ -1543,6 +1543,10 @@ mod tests {
         assert_eq!(
             merge_auto_ipv6_address("2606:4700:4700::1111", Some("fd00::20".parse().unwrap())),
             "2606:4700:4700::1111"
+        );
+        assert_eq!(
+            merge_auto_ipv6_address("", Some("fd00::20".parse().unwrap())),
+            ""
         );
     }
 }
