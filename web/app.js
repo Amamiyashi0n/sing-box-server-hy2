@@ -576,14 +576,32 @@ function renderUsers(users) {
     <div class="user-row" data-user-row>
       <label class="field"><span class="user-index">USER ${String(index + 1).padStart(2, "0")}</span><input data-user-name required value="${escapeHtml(user.name || "")}" placeholder="用户名"></label>
       <label class="field"><span>密码</span><input data-user-password required type="password" value="${escapeHtml(user.password || "")}" placeholder="HY2 密码"></label>
-      <button class="button danger compact" data-remove-user type="button">移除</button>
+      <div class="user-row-actions">
+        <button class="button secondary compact" data-generate-user-password type="button">随机密码</button>
+        <button class="button danger compact" data-remove-user type="button">移除</button>
+      </div>
     </div>`).join("");
+  list.querySelectorAll("[data-generate-user-password]").forEach(button => button.addEventListener("click", generateUserPassword));
   list.querySelectorAll("[data-remove-user]").forEach(button => button.addEventListener("click", () => {
     button.closest("[data-user-row]").remove();
     renumberUsers();
   }));
   applyPasswordVisibility();
   renderShareLinks();
+}
+
+function generateUserPassword(event) {
+  if (!globalThis.crypto?.getRandomValues) {
+    toast("当前浏览器不支持安全随机密码生成", true);
+    return;
+  }
+  const bytes = new Uint8Array(24);
+  globalThis.crypto.getRandomValues(bytes);
+  const password = [...bytes].map(byte => byte.toString(16).padStart(2, "0")).join("");
+  const input = $("[data-user-password]", event.currentTarget.closest("[data-user-row]"));
+  input.value = password;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  toast("已生成随机密码，保存后生效");
 }
 
 function renumberUsers() {

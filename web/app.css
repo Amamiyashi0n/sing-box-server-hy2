@@ -152,6 +152,7 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.5; }
 
 .user-list { display: grid; gap: 8px; }
 .user-row { display: grid; grid-template-columns: minmax(150px, .75fr) minmax(240px, 1.4fr) auto; gap: 10px; align-items: end; padding: 12px; border-radius: 8px; background: var(--surface); }
+.user-row-actions { display: flex; align-items: center; gap: 7px; }
 .user-index { color: var(--subtle); font-size: 10px; margin-bottom: 7px; }
 .empty { padding: 18px 0; color: var(--subtle); font-size: 12px; }
 .subscription-options { margin-bottom: 16px; }
@@ -259,6 +260,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .7); }
   .startup-grid { grid-template-columns: 1fr; gap: 15px; }
   .startup-wide { grid-column: auto; }
   .user-row { grid-template-columns: 1fr; }
+  .user-row-actions { justify-content: flex-end; }
   .share-protocol { grid-template-columns: 1fr; gap: 7px; }
   .share-protocol-name { padding-top: 0; }
   .share-link-line { grid-template-columns: 1fr auto; }
