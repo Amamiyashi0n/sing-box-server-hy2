@@ -60,7 +60,7 @@ pub struct UserTrafficSnapshot {
 }
 
 #[derive(Default)]
-struct UserTraffic {
+pub(crate) struct UserTraffic {
     uploaded_bytes: AtomicU64,
     downloaded_bytes: AtomicU64,
     active_connections: AtomicU64,
@@ -91,7 +91,7 @@ impl TrafficRegistry {
         snapshots
     }
 
-    fn user(&self, username: &str) -> Arc<UserTraffic> {
+    pub(crate) fn user(&self, username: &str) -> Arc<UserTraffic> {
         if let Some(traffic) = self
             .users
             .read()
@@ -107,23 +107,23 @@ impl TrafficRegistry {
 }
 
 impl UserTraffic {
-    fn connection(self: &Arc<Self>) -> ActiveConnection {
+    pub(crate) fn connection(self: &Arc<Self>) -> ActiveConnection {
         self.active_connections.fetch_add(1, Ordering::Relaxed);
         ActiveConnection(Arc::clone(self))
     }
 
-    fn record_upload(&self, bytes: usize) {
+    pub(crate) fn record_upload(&self, bytes: usize) {
         self.uploaded_bytes
             .fetch_add(bytes as u64, Ordering::Relaxed);
     }
 
-    fn record_download(&self, bytes: usize) {
+    pub(crate) fn record_download(&self, bytes: usize) {
         self.downloaded_bytes
             .fetch_add(bytes as u64, Ordering::Relaxed);
     }
 }
 
-struct ActiveConnection(Arc<UserTraffic>);
+pub(crate) struct ActiveConnection(Arc<UserTraffic>);
 
 impl Drop for ActiveConnection {
     fn drop(&mut self) {
@@ -165,18 +165,51 @@ where
     let server_config = make_server_config(&config, Arc::clone(&congestion))?;
     let endpoint = make_endpoint(server_config, &config)
         .with_context(|| format!("bind HY2 UDP listener on {listen}"))?;
+    let trojan_listener = crate::trojan::bind_listener(listen)
+        .with_context(|| format!("bind Trojan TCP listener on {listen}"))?;
+    let trojan_acceptor = crate::trojan::tls_acceptor(&config)?;
+    let trojan_users = Arc::new(crate::trojan::hashed_users(&config.users));
     info!(%listen, users = users.len(), "HY2 server listening");
+    info!(%listen, users = trojan_users.len(), "Trojan TCP server listening");
 
     tokio::pin!(shutdown);
     loop {
         let incoming = tokio::select! {
-            incoming = endpoint.accept() => incoming,
+            incoming = endpoint.accept() => Some((incoming, None)),
+            accepted = trojan_listener.accept() => Some((None, Some(accepted))),
             () = &mut shutdown => {
                 endpoint.close(0_u32.into(), b"server reload");
                 endpoint.wait_idle().await;
                 return Ok(());
             }
         };
+        let Some((incoming, accepted)) = incoming else {
+            return Ok(());
+        };
+        if let Some(accepted) = accepted {
+            let (socket, remote) = accepted.context("accept Trojan TCP connection")?;
+            let acceptor = trojan_acceptor.clone();
+            let users = Arc::clone(&trojan_users);
+            let traffic = Arc::clone(&traffic);
+            let outbound_mode = config.outbound.mode;
+            let udp_timeout = Duration::from_secs(config.udp.timeout_secs);
+            tokio::spawn(async move {
+                if let Err(error) = crate::trojan::serve(
+                    socket,
+                    remote,
+                    acceptor,
+                    users,
+                    outbound_mode,
+                    udp_timeout,
+                    traffic,
+                )
+                .await
+                {
+                    debug!(%remote, %error, "Trojan connection closed");
+                }
+            });
+            continue;
+        }
         let Some(incoming) = incoming else {
             return Ok(());
         };
@@ -724,7 +757,7 @@ async fn relay_tcp_stream(
     Ok(())
 }
 
-async fn connect_tcp(destination: &str, mode: OutboundMode) -> io::Result<TcpStream> {
+pub(crate) async fn connect_tcp(destination: &str, mode: OutboundMode) -> io::Result<TcpStream> {
     let addresses = resolve_outbound_addresses(destination, mode).await?;
     let mut last_error = None;
     for address in addresses {
@@ -741,7 +774,7 @@ async fn connect_tcp(destination: &str, mode: OutboundMode) -> io::Result<TcpStr
     }))
 }
 
-async fn resolve_outbound_addresses(
+pub(crate) async fn resolve_outbound_addresses(
     destination: &str,
     mode: OutboundMode,
 ) -> io::Result<Vec<SocketAddr>> {

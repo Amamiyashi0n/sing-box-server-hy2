@@ -1,18 +1,20 @@
 # sing-box-ser-mini
 
-Rust reimplementation of the sing-box Hysteria 2 inbound server only.
+Minimal Rust server for Hysteria 2 over UDP and Trojan over TCP.
 
 Scope:
 
-- Hysteria 2 inbound server over QUIC and TLS.
-- Password authentication, TCP relay, and UDP relay.
-- No Hysteria 2 outbound client or other sing-box protocols.
+- Hysteria 2 inbound server over QUIC/UDP and TLS.
+- Trojan inbound server over TLS/TCP on the same numeric port.
+- Shared password authentication, relay, and traffic accounting.
+- No outbound client implementation or unrelated sing-box protocols.
 
 Implemented:
 
 - QUIC/TLS HTTP/3 authentication with multiple password users.
 - Byte-compatible HY2 TCP and UDP framing.
-- TCP forwarding and UDP sessions with fragmentation, reassembly, and idle cleanup.
+- HY2 TCP forwarding and UDP sessions with fragmentation, reassembly, and idle cleanup.
+- Trojan CONNECT forwarding and UDP-over-TCP framing for TCP-only NAT deployments.
 - Salamander UDP obfuscation.
 - HY2 bandwidth negotiation with dynamic BBR/Brutal congestion control.
 - String, directory, and reverse-proxy HTTP/3 masquerade handlers.
@@ -68,14 +70,16 @@ CONFIG_PATH=/workspace/sing-box-ser-mini/config.toml \
 Open `http://server-address:9080` and sign in as `admin` with the generated
 password.
 The UI provides runtime status, typed configuration editing, atomic saves, and
-HY2 service reloads without restarting the management process.
+both protocol services reload without restarting the management process.
 The listener is configured as a port in the WebUI and saved as `[::]:<port>`;
 the UDP socket explicitly enables dual-stack mode so the same port accepts
 both IPv4 and IPv6 traffic.
-For a NAT deployment, keep the internal listener port set to the local UDP
-destination and set the independent public port to the external UDP mapping.
-Generated HY2 URIs and subscriptions use the public port while the server keeps
-binding the internal listener port.
+For a NAT deployment, keep the internal listener port set to the local TCP/UDP
+destination and set the independent public port to the external mapping.
+The server binds HY2 on UDP and Trojan on TCP using that same numeric port.
+Generated URIs and subscriptions use the public port while the server keeps
+binding the internal listener port. TCP and UDP NAT rules can be configured
+independently.
 The IPv4/hostname and IPv6 share-address fields are prefilled automatically but
 remain editable. A non-empty value is treated as an explicit override; clearing
 the field and saving runs automatic detection again. Private IPv6 addresses are
@@ -129,7 +133,7 @@ Base64 URI subscription. Legacy Clash clients receive YAML rule providers
 instead of unsupported MRS files. Add `?format=clash`, `?format=singbox`,
 `?format=surge`, or `?format=xray` to an adaptive `/sub/<code>` URL when a
 client does not send an identifiable User-Agent. Subscription responses use
-the first node name (the HY2 username for generated user links) as the profile
+the first node name (the shared username for generated user links) as the profile
 title and download filename. User IPv4/IPv6 links are permanent; only
 converter-workspace links use the 24-hour persisted TTL.
 

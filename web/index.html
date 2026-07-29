@@ -20,7 +20,7 @@
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
-        <div><strong>sing-box-ser-mini</strong><span>Hysteria 2</span></div>
+        <div><strong>sing-box-ser-mini</strong><span>HY2 + Trojan</span></div>
       </div>
       <nav aria-label="配置导航">
         <div class="nav-group">
@@ -69,6 +69,7 @@
         </div>
         <div class="runtime-flags">
           <span id="flag-udp">UDP --</span>
+          <span id="flag-tcp">TCP --</span>
           <span id="flag-obfs">Salamander --</span>
           <span id="flag-generation">Generation --</span>
         </div>
@@ -100,9 +101,9 @@
       <form id="config-form" autocomplete="off">
         <div class="page-panel" data-page="service">
         <section class="config-section" id="network" aria-labelledby="network-title">
-          <div class="section-heading"><h2 id="network-title">监听与 TLS</h2></div>
+          <div class="section-heading"><h2 id="network-title">双协议监听与 TLS</h2></div>
           <div class="network-primary-grid">
-            <label class="field"><span>内部监听端口</span><input id="listen-port" type="number" min="1" max="65535" step="1" required placeholder="14443"></label>
+            <label class="field"><span>内部监听端口（UDP HY2 / TCP Trojan）</span><input id="listen-port" type="number" min="1" max="65535" step="1" required placeholder="51400"></label>
             <label class="field"><span>TLS 证书</span><input id="certificate" required placeholder="/path/fullchain.pem"></label>
             <label class="field"><span>TLS 私钥</span><input id="private-key" required placeholder="/path/privkey.pem"></label>
           </div>

@@ -84,6 +84,7 @@ struct RuntimeState {
     service_address: Option<String>,
     users: usize,
     udp_enabled: bool,
+    tcp_enabled: bool,
     obfs: bool,
     up_mbps: u64,
     down_mbps: u64,
@@ -101,6 +102,7 @@ struct StatusResponse {
     webui_listen: String,
     users: usize,
     udp_enabled: bool,
+    tcp_enabled: bool,
     obfs: bool,
     up_mbps: u64,
     down_mbps: u64,
@@ -256,6 +258,7 @@ pub async fn run(
             );
             runtime.users = config.users.len();
             runtime.udp_enabled = config.udp.enabled;
+            runtime.tcp_enabled = true;
             runtime.obfs = config.obfs.is_some();
             runtime.up_mbps = config.bandwidth.up_mbps;
             runtime.down_mbps = config.bandwidth.down_mbps;
@@ -320,7 +323,7 @@ async fn record_server_result(
     runtime.running = false;
     runtime.last_error = error.clone();
     if let Some(error) = error {
-        warn!(%error, "HY2 server stopped");
+        warn!(%error, "proxy server stopped");
     }
 }
 
@@ -476,6 +479,7 @@ async fn status(
         webui_listen: state.webui_listen.as_ref().clone(),
         users: runtime.users,
         udp_enabled: runtime.udp_enabled,
+        tcp_enabled: runtime.tcp_enabled,
         obfs: runtime.obfs,
         up_mbps: runtime.up_mbps,
         down_mbps: runtime.down_mbps,
@@ -594,7 +598,7 @@ async fn put_config(
         .map_err(ApiError::internal)?;
     Ok(Json(MutationResponse {
         accepted: true,
-        message: "configuration saved; HY2 service is reloading",
+        message: "configuration saved; proxy service is reloading",
     }))
 }
 
@@ -611,7 +615,7 @@ async fn reload(
         .map_err(ApiError::internal)?;
     Ok(Json(MutationResponse {
         accepted: true,
-        message: "HY2 service is reloading",
+        message: "proxy service is reloading",
     }))
 }
 

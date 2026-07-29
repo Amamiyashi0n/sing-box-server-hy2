@@ -5,11 +5,11 @@ use clap::Parser;
 use sing_box_ser_mini::config::Config;
 
 #[derive(Debug, Parser)]
-#[command(about = "Hysteria 2 server-only implementation")]
+#[command(about = "Minimal Hysteria 2 and Trojan server implementation")]
 struct Args {
     #[arg(short, long, default_value = "config.toml")]
     config: PathBuf,
-    #[arg(long, help = "Validate configuration without opening a UDP socket")]
+    #[arg(long, help = "Validate configuration without opening service sockets")]
     check: bool,
     #[arg(long, default_value = "127.0.0.1:9080")]
     admin_listen: SocketAddr,
@@ -68,7 +68,7 @@ async fn run(args: Args, worker_threads: usize) -> Result<()> {
     let config = Config::load(&args.config)?;
     if args.check {
         println!(
-            "HY2 server configuration is valid: listen={}, users={}",
+            "HY2 and Trojan server configuration is valid: listen={}, users={}",
             config.listen,
             config.users.len()
         );

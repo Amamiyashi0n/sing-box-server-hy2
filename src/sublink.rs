@@ -611,15 +611,24 @@ impl SublinkService {
         let url = Url::parse(raw_url).map_err(|_| anyhow!("invalid URL parameter"))?;
         ensure!(url.path() == "/xray", "invalid HY2 URL parameter");
         let config = query_value(&url, &["config"]);
+        let nodes = parse_input(&config).map_err(|_| anyhow!("invalid HY2 URL parameter"))?;
         ensure!(
-            config.starts_with("hysteria2://"),
+            nodes.first().is_some_and(|node| node.kind == "hysteria2")
+                && nodes
+                    .iter()
+                    .all(|node| matches!(node.kind.as_str(), "hysteria2" | "trojan")),
             "invalid HY2 URL parameter"
         );
         ensure!(
             config.len() <= MAX_INPUT_BYTES,
             "URL parameter is too large"
         );
-        let code = stable_code(config.as_bytes());
+        let primary_hy2 = config
+            .lines()
+            .map(str::trim)
+            .find(|line| line.starts_with("hysteria2://"))
+            .ok_or_else(|| anyhow!("invalid HY2 URL parameter"))?;
+        let code = stable_code(primary_hy2.as_bytes());
         let selected_rules = query_value_optional(&url, &["selectedRules"]);
         if let Some(selected_rules) = selected_rules.as_deref() {
             parse_rule_preset(selected_rules)?;
@@ -1172,10 +1181,11 @@ fn render_singbox(
     china_optimized: bool,
 ) -> Result<String> {
     let mut outbounds = nodes.iter().map(singbox_node).collect::<Vec<_>>();
+    let proxy_names = proxy_node_names(nodes);
     outbounds.push(json!({
         "type": "selector",
         "tag": "PROXY",
-        "outbounds": nodes.iter().map(|node| node.name.clone()).collect::<Vec<_>>()
+        "outbounds": proxy_names
     }));
     outbounds.push(json!({ "type": "direct", "tag": "DIRECT" }));
     let mut route_rules = Vec::new();
@@ -1496,8 +1506,8 @@ fn render_clash(
         }
     }
     output.push_str("proxy-groups:\n  - name: PROXY\n    type: select\n    proxies:\n");
-    for node in nodes {
-        let _ = writeln!(output, "      - {}", yaml_quote(&node.name));
+    for name in proxy_node_names(nodes) {
+        let _ = writeln!(output, "      - {}", yaml_quote(&name));
     }
     output.push_str("      - DIRECT\n");
     if china_optimized && use_mrs {
@@ -1626,9 +1636,9 @@ fn render_surge(
     }
     output.push_str("\n[Proxy Group]\nPROXY = select,");
     output.push_str(
-        &nodes
+        &proxy_node_names(nodes)
             .iter()
-            .map(|node| surge_value(&node.name))
+            .map(|name| surge_value(name))
             .collect::<Vec<_>>()
             .join(","),
     );
@@ -1656,6 +1666,24 @@ fn render_surge(
     }
     output.push_str("FINAL,PROXY\n");
     output
+}
+
+fn proxy_node_names(nodes: &[Node]) -> Vec<String> {
+    let dual_tcp_fallback = nodes.len() == 2
+        && nodes.iter().any(|node| node.kind == "hysteria2")
+        && nodes.iter().any(|node| node.kind == "trojan")
+        && nodes[0].server == nodes[1].server
+        && nodes[0].port == nodes[1].port
+        && nodes[0].password == nodes[1].password;
+    if !dual_tcp_fallback {
+        return nodes.iter().map(|node| node.name.clone()).collect();
+    }
+    nodes
+        .iter()
+        .filter(|node| node.kind == "trojan")
+        .chain(nodes.iter().filter(|node| node.kind != "trojan"))
+        .map(|node| node.name.clone())
+        .collect()
 }
 
 fn rule_policy(action: RuleAction) -> &'static str {
@@ -1885,6 +1913,38 @@ mod tests {
 
         let second = SublinkService::with_persistence(path).unwrap();
         assert_eq!(second.redirect("x", &code).await.unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn permanent_hy2_link_upgrades_to_dual_protocol_without_changing_code() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("dual-protocol-links.toml");
+        let hy2 = "hysteria2://password@example.com:443/?sni=example.com#user";
+        let trojan = "trojan://password@example.com:443?sni=example.com#user-TCP";
+        let service = SublinkService::with_persistence(path).unwrap();
+        let hy2_url = format!(
+            "https://example.com/xray?config={}",
+            url::form_urlencoded::byte_serialize(hy2.as_bytes()).collect::<String>()
+        );
+        let code = service.shorten_hy2(&hy2_url).await.unwrap();
+        let dual = format!("{hy2}\n{trojan}");
+        let dual_url = format!(
+            "https://example.com/xray?config={}",
+            url::form_urlencoded::byte_serialize(dual.as_bytes()).collect::<String>()
+        );
+        assert_eq!(service.shorten_hy2(&dual_url).await.unwrap(), code);
+
+        let output = service.auto(&code, "sing-box/1.14", "").await.unwrap();
+        assert!(output.body.contains("\"type\":\"hysteria2\""));
+        assert!(output.body.contains("\"type\":\"trojan\""));
+        let document: Value = serde_json::from_str(&output.body).unwrap();
+        let selector = document["outbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|outbound| outbound["tag"] == "PROXY")
+            .unwrap();
+        assert_eq!(selector["outbounds"], json!(["user-TCP", "user"]));
     }
 
     #[tokio::test]

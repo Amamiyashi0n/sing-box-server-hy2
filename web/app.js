@@ -406,6 +406,7 @@ async function loadStatus() {
     $("#metric-uptime").textContent = formatUptime(status.uptime_secs);
     renderTraffic(status.traffic || []);
     $("#flag-udp").textContent = `UDP ${status.udp_enabled ? "ON" : "OFF"}`;
+    $("#flag-tcp").textContent = `TCP ${status.tcp_enabled ? "ON" : "OFF"}`;
     $("#flag-obfs").textContent = `Salamander ${status.obfs ? "ON" : "OFF"}`;
     $("#flag-generation").textContent = `Generation ${status.generation}`;
     $("#updated-at").textContent = `同步于 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
@@ -575,7 +576,7 @@ function renderUsers(users) {
   list.innerHTML = users.map((user, index) => `
     <div class="user-row" data-user-row>
       <label class="field"><span class="user-index">USER ${String(index + 1).padStart(2, "0")}</span><input data-user-name required value="${escapeHtml(user.name || "")}" placeholder="用户名"></label>
-      <label class="field"><span>密码</span><input data-user-password required type="password" value="${escapeHtml(user.password || "")}" placeholder="HY2 密码"></label>
+      <label class="field"><span>共享密码</span><input data-user-password required type="password" value="${escapeHtml(user.password || "")}" placeholder="HY2 / Trojan 密码"></label>
       <div class="user-row-actions">
         <button class="button secondary compact" data-generate-user-password type="button">随机密码</button>
         <button class="button danger compact" data-remove-user type="button">移除</button>
@@ -641,7 +642,7 @@ function shareHost(value) {
   return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
 }
 
-function buildShareLink(user, server) {
+function buildHy2ShareLink(user, server) {
   const port = Number($("#share-port").value);
   if (!server || !port || !user.password) return "";
   const query = new URLSearchParams();
@@ -657,16 +658,29 @@ function buildShareLink(user, server) {
   return `hysteria2://${encodeUserInfo(user.password)}@${shareHost(server)}:${port}/?${parameters}${fragment}`;
 }
 
+function buildTrojanShareLink(user, server) {
+  const port = Number($("#share-port").value);
+  if (!server || !port || !user.password) return "";
+  const query = new URLSearchParams();
+  const sni = $("#share-sni").value.trim();
+  if (sni) query.set("sni", sni);
+  if ($("#share-insecure").checked) query.set("allowInsecure", "1");
+  const parameters = query.toString();
+  const name = user.name ? `${user.name}-TCP` : "TCP";
+  const suffix = `${parameters ? `?${parameters}` : ""}#${encodeURIComponent(name)}`;
+  return `trojan://${encodeUserInfo(user.password)}@${shareHost(server)}:${port}${suffix}`;
+}
+
 function currentShareLinks() {
   const servers = [
     { family: "IPv4", server: $("#share-ipv4-server").value.trim() },
     { family: "IPv6", server: $("#share-ipv6-server").value.trim() }
   ].filter(item => item.server);
-  return collectUsers(false).flatMap(user => servers.map(({ family, server }) => ({
-    user,
-    family,
-    link: buildShareLink(user, server)
-  }))).filter(item => item.link);
+  return collectUsers(false).flatMap(user => servers.map(({ family, server }) => {
+    const link = buildHy2ShareLink(user, server);
+    const trojan = buildTrojanShareLink(user, server);
+    return { user, family, link, trojan, subscription: [link, trojan].filter(Boolean).join("\n") };
+  })).filter(item => item.link && item.trojan);
 }
 
 function renderShareRuleOptions() {
@@ -679,7 +693,7 @@ function renderShareLinks() {
   const target = $("#share-links");
   if (!target) return;
   const links = currentShareLinks();
-  $("#link-count").textContent = `${links.length} 个链接`;
+  $("#link-count").textContent = `${links.length} 个用户端点`;
   if (!$("#share-ipv4-server").value.trim() && !$("#share-ipv6-server").value.trim()) {
     target.innerHTML = '<div class="empty">未检测到可用于客户端链接的 IPv4 或 IPv6 地址</div>';
     return;
@@ -697,11 +711,21 @@ function renderShareLinks() {
           <div class="share-link-line">
             <span>${item.family} 连接</span>
             <input aria-label="${escapeHtml(item.user.name || "用户")} HY2 ${item.family} 连接" readonly value="${escapeHtml(item.link)}">
-            <button class="button secondary compact" data-copy-link="${index}" data-link-kind="source" type="button">复制</button>
+            <button class="button secondary compact" data-copy-link="${index}" data-link-kind="hy2" type="button">复制</button>
+          </div>
+        </div>
+      </div>
+      <div class="share-protocol">
+        <div class="share-protocol-name">Trojan</div>
+        <div class="share-link-fields">
+          <div class="share-link-line">
+            <span>${item.family} TCP</span>
+            <input aria-label="${escapeHtml(item.user.name || "用户")} Trojan ${item.family} 连接" readonly value="${escapeHtml(item.trojan)}">
+            <button class="button secondary compact" data-copy-link="${index}" data-link-kind="trojan" type="button">复制</button>
           </div>
           <div class="share-link-line">
-            <span>${item.family} 订阅</span>
-            <input aria-label="${escapeHtml(item.user.name || "用户")} HY2 ${item.family} 订阅" readonly
+            <span>双协议订阅</span>
+            <input aria-label="${escapeHtml(item.user.name || "用户")} ${item.family} 双协议订阅" readonly
               value="${escapeHtml(state.shareShortLinks.get(item.link) || "")}"
               placeholder="${state.shareShortLinksPending.has(item.link) ? "正在生成" : escapeHtml(state.shareShortLinkErrors.get(item.link) || "保存后生成")}">
             <button class="button secondary compact" data-copy-link="${index}" data-link-kind="short" type="button" ${state.shareShortLinks.has(item.link) ? "" : "disabled"}>复制</button>
@@ -710,12 +734,16 @@ function renderShareLinks() {
       </div>
     </article>`).join("");
   target.querySelectorAll("[data-copy-link]").forEach(button => button.addEventListener("click", async () => {
-    const source = links[Number(button.dataset.copyLink)].link;
-    const link = button.dataset.linkKind === "short" ? state.shareShortLinks.get(source) : source;
+    const item = links[Number(button.dataset.copyLink)];
+    const link = button.dataset.linkKind === "short"
+      ? state.shareShortLinks.get(item.link)
+      : button.dataset.linkKind === "trojan" ? item.trojan : item.link;
     if (!link) return;
     try {
       await copyText(link);
-      toast(button.dataset.linkKind === "short" ? "短链接已复制" : "HY2 连接已复制");
+      const message = button.dataset.linkKind === "short" ? "双协议短链接已复制"
+        : button.dataset.linkKind === "trojan" ? "Trojan TCP 连接已复制" : "HY2 连接已复制";
+      toast(message);
     } catch {
       toast("复制失败，请手动选择链接", true);
     }
@@ -732,7 +760,7 @@ async function generateShareShortLinks() {
   await Promise.all(missing.map(async item => {
     try {
       const longUrl = new URL("/xray", window.location.origin);
-      longUrl.searchParams.set("config", item.link);
+      longUrl.searchParams.set("config", item.subscription);
       longUrl.searchParams.set("selectedRules", state.shareRulePreset);
       if (state.shareAdBlock && state.shareRulePreset !== "comprehensive") {
         longUrl.searchParams.set("adblock", "true");
@@ -937,7 +965,7 @@ async function saveConfig(event) {
     state.shareShortLinks.clear();
     state.shareShortLinkErrors.clear();
     await generateShareShortLinks();
-    toast("配置已保存，HY2 服务正在重新加载");
+    toast("配置已保存，双协议服务正在重新加载");
     setTimeout(loadStatus, 450);
   } catch (error) { toast(error.message, true); }
   finally { button.disabled = false; }
