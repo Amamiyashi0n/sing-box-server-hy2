@@ -76,6 +76,10 @@ For a NAT deployment, keep the internal listener port set to the local UDP
 destination and set the independent public port to the external UDP mapping.
 Generated HY2 URIs and subscriptions use the public port while the server keeps
 binding the internal listener port.
+The IPv4/hostname and IPv6 share-address fields are prefilled automatically but
+remain editable. A non-empty value is treated as an explicit override; clearing
+the field and saving runs automatic detection again. Private IPv6 addresses are
+never published as client subscription endpoints.
 
 The service page also detects OpenRC or systemd and can install or remove the
 `sing-box-ser-mini` boot service from the WebUI. The generated service preserves

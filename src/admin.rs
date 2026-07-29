@@ -1101,29 +1101,18 @@ fn apply_auto_share_addresses(config: &mut Config) {
 }
 
 fn merge_auto_ipv4_address(existing: &str, detected: Option<Ipv4Addr>) -> String {
-    let existing_hostname = !existing.trim().is_empty() && existing.parse::<Ipv4Addr>().is_err();
-    if existing_hostname {
+    if !existing.trim().is_empty() {
         return existing.to_owned();
     }
-    let existing_public = existing
-        .parse::<Ipv4Addr>()
-        .ok()
-        .is_some_and(|address| ipv4_scope(address) == "public");
-    match detected {
-        Some(address) if ipv4_scope(address) == "public" || !existing_public => address.to_string(),
-        _ if existing_public => existing.to_owned(),
-        _ => String::new(),
-    }
+    detected.map_or_else(String::new, |address| address.to_string())
 }
 
 fn merge_auto_ipv6_address(existing: &str, detected: Option<Ipv6Addr>) -> String {
-    let existing_public = existing
-        .parse::<Ipv6Addr>()
-        .ok()
-        .is_some_and(is_public_ipv6);
+    if !existing.trim().is_empty() {
+        return existing.to_owned();
+    }
     match detected {
         Some(address) if is_public_ipv6(address) => address.to_string(),
-        _ if existing_public => existing.to_owned(),
         _ => String::new(),
     }
 }
@@ -1546,7 +1535,7 @@ mod tests {
         );
         assert_eq!(
             merge_auto_ipv4_address("23.147.56.201", Some("8.8.8.8".parse().unwrap())),
-            "8.8.8.8"
+            "23.147.56.201"
         );
         assert_eq!(
             merge_auto_ipv6_address("2606:4700:4700::1111", Some("fd00::20".parse().unwrap())),
