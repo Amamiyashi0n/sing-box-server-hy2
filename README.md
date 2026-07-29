@@ -72,6 +72,10 @@ HY2 service reloads without restarting the management process.
 The listener is configured as a port in the WebUI and saved as `[::]:<port>`;
 the UDP socket explicitly enables dual-stack mode so the same port accepts
 both IPv4 and IPv6 traffic.
+For a NAT deployment, keep the internal listener port set to the local UDP
+destination and set the independent public port to the external UDP mapping.
+Generated HY2 URIs and subscriptions use the public port while the server keeps
+binding the internal listener port.
 
 The service page also detects OpenRC or systemd and can install or remove the
 `sing-box-ser-mini` boot service from the WebUI. The generated service preserves

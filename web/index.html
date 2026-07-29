@@ -102,14 +102,14 @@
         <section class="config-section" id="network" aria-labelledby="network-title">
           <div class="section-heading"><h2 id="network-title">监听与 TLS</h2></div>
           <div class="network-primary-grid">
-            <label class="field"><span>监听端口</span><input id="listen-port" type="number" min="1" max="65535" step="1" required placeholder="14443"></label>
+            <label class="field"><span>内部监听端口</span><input id="listen-port" type="number" min="1" max="65535" step="1" required placeholder="14443"></label>
             <label class="field"><span>TLS 证书</span><input id="certificate" required placeholder="/path/fullchain.pem"></label>
             <label class="field"><span>TLS 私钥</span><input id="private-key" required placeholder="/path/privkey.pem"></label>
           </div>
           <div class="field-grid three share-settings">
             <div class="display-field"><span>IPv4 地址（自动）</span><strong id="share-ipv4-server" data-address="">未检测到</strong></div>
             <div class="display-field"><span>IPv6 地址（自动）</span><strong id="share-ipv6-server" data-address="">未检测到</strong></div>
-            <label class="field"><span>公网端口</span><input id="share-port" type="number" min="1" max="65535" step="1" placeholder="443"></label>
+            <label class="field"><span>外部公网端口（NAT）</span><input id="share-port" type="number" min="1" max="65535" step="1" placeholder="54443"></label>
             <label class="field"><span>TLS SNI</span><input id="share-sni" readonly></label>
             <label class="check share-insecure"><input id="share-insecure" type="checkbox"><span>允许不安全证书</span></label>
           </div>
