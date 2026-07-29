@@ -1101,6 +1101,10 @@ fn apply_auto_share_addresses(config: &mut Config) {
 }
 
 fn merge_auto_ipv4_address(existing: &str, detected: Option<Ipv4Addr>) -> String {
+    let existing_hostname = !existing.trim().is_empty() && existing.parse::<Ipv4Addr>().is_err();
+    if existing_hostname {
+        return existing.to_owned();
+    }
     let existing_public = existing
         .parse::<Ipv4Addr>()
         .ok()
@@ -1528,6 +1532,10 @@ mod tests {
 
     #[test]
     fn nat_detection_preserves_explicit_public_share_addresses() {
+        assert_eq!(
+            merge_auto_ipv4_address("ph1.deeprush.ai", Some("10.91.0.36".parse().unwrap())),
+            "ph1.deeprush.ai"
+        );
         assert_eq!(
             merge_auto_ipv4_address("23.147.56.201", Some("10.0.160.2".parse().unwrap())),
             "23.147.56.201"
