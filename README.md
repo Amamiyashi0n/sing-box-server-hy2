@@ -1,20 +1,22 @@
 # sing-box-ser-mini
 
-Minimal Rust server for Hysteria 2 over UDP and Trojan over TCP.
+Minimal Rust server for Hysteria 2 over UDP plus VLESS over TCP, including
+internally framed UDP-over-TCP for UDP-restricted networks.
 
 Scope:
 
 - Hysteria 2 inbound server over QUIC/UDP and TLS.
-- Trojan inbound server over TLS/TCP on the same numeric port.
-- Shared password authentication, relay, and traffic accounting.
-- No outbound client implementation or unrelated sing-box protocols.
+- VLESS v0 inbound server over TLS/TCP on the same numeric port.
+- Native length-framed UDP forwarding inside VLESS/TCP.
+- Shared password authentication and traffic accounting.
+- No unrelated sing-box protocols.
 
 Implemented:
 
 - QUIC/TLS HTTP/3 authentication with multiple password users.
 - Byte-compatible HY2 TCP and UDP framing.
 - HY2 TCP forwarding and UDP sessions with fragmentation, reassembly, and idle cleanup.
-- Trojan CONNECT forwarding and UDP-over-TCP framing for TCP-only NAT deployments.
+- VLESS TCP CONNECT only; UDP, XUDP, Vision, and multiplexing are rejected.
 - Salamander UDP obfuscation.
 - HY2 bandwidth negotiation with dynamic BBR/Brutal congestion control.
 - String, directory, and reverse-proxy HTTP/3 masquerade handlers.
@@ -70,13 +72,15 @@ CONFIG_PATH=/workspace/sing-box-ser-mini/config.toml \
 Open `http://server-address:9080` and sign in as `admin` with the generated
 password.
 The UI provides runtime status, typed configuration editing, atomic saves, and
-both protocol services reload without restarting the management process.
+all protocol services reload without restarting the management process.
 The listener is configured as a port in the WebUI and saved as `[::]:<port>`;
 the UDP socket explicitly enables dual-stack mode so the same port accepts
 both IPv4 and IPv6 traffic.
 For a NAT deployment, keep the internal listener port set to the local TCP/UDP
 destination and set the independent public port to the external mapping.
-The server binds HY2 on UDP and Trojan on TCP using that same numeric port.
+The server binds HY2 on UDP and VLESS on the same numeric TCP port. Both
+transports reuse the configured
+users, certificate, outbound policy, and traffic accounting.
 Generated URIs and subscriptions use the public port while the server keeps
 binding the internal listener port. TCP and UDP NAT rules can be configured
 independently.
@@ -101,10 +105,68 @@ IPv6 while forwarding website traffic over IPv4 without setup. An IPv6-only
 host shows a warning because IPv4-only websites require an external translation
 service.
 
+### NAT bypass TCP ingress
+
+The binary includes a narrowly scoped reverse TCP entry for VLESS TCP. It is
+not a general-purpose SOCKS or outbound relay.
+The NAT-side client keeps a small pool of authenticated outbound connections to
+a public gateway. Each incoming proxy connection receives one dedicated tunnel,
+avoiding cross-connection head-of-line blocking and bypassing restricted inbound
+NAT mappings.
+
+Create the same random token file on both machines:
+
+```sh
+openssl rand -hex 32 > nat-tunnel.token
+chmod 600 nat-tunnel.token
+```
+
+Run the gateway on the public entry machine:
+
+```sh
+sing-box-ser-mini nat-gateway \
+  --tunnel-listen 0.0.0.0:7000 \
+  --public-listen 0.0.0.0:51400 \
+  --token-file nat-tunnel.token
+```
+
+Run the client beside the proxy server behind NAT:
+
+```sh
+sing-box-ser-mini nat-client \
+  --gateway gateway.example.com:7000 \
+  --local 127.0.0.1:51400 \
+  --token-file nat-tunnel.token \
+  --pool-size 4
+```
+
+Authentication uses a fresh random challenge and a keyed BLAKE2 response, so
+the token is never transmitted and captured responses cannot be replayed. The
+tunnel does not add another data-encryption layer: public payloads remain the
+existing VLESS TLS stream. TCP keepalive, automatic reconnect, preconnection,
+and assignment acknowledgement keep stale NAT sessions out of the data path.
+HY2 remains native QUIC/UDP and is intentionally not wrapped in this TCP path.
+
+The WebUI keeps this functionality on its own **Reverse proxy** page instead of
+mixing it with protocol or outbound settings. The tunnel is disabled by default.
+Select **Relay** to expose the tunnel and public TCP ports, or **Egress** to
+maintain the preconnected pool from the outbound device to a relay. Settings and the shared
+token are stored beside the main server configuration in `reverse-proxy.toml`
+with mode `0600`. Saving an enabled configuration starts or replaces the tunnel
+inside the main service process; disabling it closes the listeners and workers.
+The Masquerade fixed response, directory server, and website reverse proxy are
+also grouped on this page.
+
+### Protocol subscription nodes
+
+Each permanent user subscription contains two standards-compliant nodes:
+Hysteria 2 over QUIC/UDP and VLESS over TLS/TCP. The reverse TCP entry exposes
+only the VLESS node because standard Hysteria 2 requires QUIC/UDP.
+
 ## Subscription converter
 
 The WebUI includes a Rust-native subscription converter on the same management
-port. It accepts SS, VMess, VLESS, Trojan, Hysteria2, TUIC, AnyTLS, and Base64
+port. It accepts SS, VMess, VLESS, Hysteria2, TUIC, and Base64
 subscriptions, and emits Sing-Box, Clash, Surge, or Xray output. Generated
 converter links use a bounded persisted store with a default capacity of 512
 and a 24-hour TTL.
@@ -141,8 +203,10 @@ The conversion behavior was rewritten in Rust from the MIT-licensed
 `Amamiyashi0n/sublink-worker-c` implementation; no C code, darkhttpd process,
 or secondary HTTP port is included.
 
-Add optional sharing metadata to generate one standards-compliant Hysteria 2
-URI per configured user:
+Add optional sharing metadata to generate standards-compliant Hysteria 2 and
+VLESS URIs and one permanent dual-protocol subscription per user.
+The VLESS UUID is deterministically derived from the username and shared password,
+so users remain isolated even when passwords match and existing files need no migration:
 
 ```toml
 [share]
@@ -163,8 +227,9 @@ Custom whitelist and blacklist entries accept exact domains and suffixes in
 subscriptions and 24-hour converter links. Blacklist rules are evaluated first,
 so a domain present in both lists is rejected.
 
-The generated URI includes authentication, TLS, and Salamander parameters, but
-intentionally excludes client-specific bandwidth settings.
+Generated URIs include authentication and TLS parameters. The Hysteria 2 URI
+also includes Salamander parameters. Client-specific bandwidth settings remain
+excluded.
 
 Masquerade is optional and defaults to an empty 404 response. The supported
 TOML forms are:
@@ -191,6 +256,13 @@ headers = { content-type = ["text/plain"] }
 `reference/sing-quic` is a read-only upstream reference pinned to the version
 used by the adjacent sing-box checkout. The server entry point is
 `reference/sing-quic/hysteria2/service.go`.
+
+`reference/xray-core` is the read-only upstream VLESS reference. The wire
+header codec is in `proxy/vless/encoding/encoding.go`, authentication is in
+`proxy/vless/validator.go`, the server entry point is
+`proxy/vless/inbound/inbound.go`, and optional VLESS encryption is under
+`proxy/vless/encryption`. Vision and XUDP integration are referenced from the
+VLESS inbound implementation and Xray's shared proxy helpers.
 
 `examples/h3_probe.rs` is an integration probe for the masquerade-to-auth flow.
 The official sing-box client test configurations are under `integration/`.

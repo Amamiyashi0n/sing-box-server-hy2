@@ -20,7 +20,7 @@
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
-        <div><strong>sing-box-ser-mini</strong><span>HY2 + Trojan</span></div>
+        <div><strong>sing-box-ser-mini</strong><span>HY2 + VLESS</span></div>
       </div>
       <nav aria-label="配置导航">
         <div class="nav-group">
@@ -31,6 +31,7 @@
           <span class="nav-group-label">服务</span>
           <a data-page="service" href="#service">服务配置</a>
           <a data-page="users" href="#users">用户与链接</a>
+          <a data-page="reverse-proxy" href="#reverse-proxy">反向代理</a>
         </div>
         <div class="nav-group">
           <span class="nav-group-label">工具</span>
@@ -101,9 +102,9 @@
       <form id="config-form" autocomplete="off">
         <div class="page-panel" data-page="service">
         <section class="config-section" id="network" aria-labelledby="network-title">
-          <div class="section-heading"><h2 id="network-title">双协议监听与 TLS</h2></div>
+          <div class="section-heading"><h2 id="network-title">多协议监听与 TLS</h2></div>
           <div class="network-primary-grid">
-            <label class="field"><span>内部监听端口（UDP HY2 / TCP Trojan）</span><input id="listen-port" type="number" min="1" max="65535" step="1" required placeholder="51400"></label>
+            <label class="field"><span>内部监听端口（UDP HY2 / TCP VLESS）</span><input id="listen-port" type="number" min="1" max="65535" step="1" required placeholder="51400"></label>
             <label class="field"><span>TLS 证书</span><input id="certificate" required placeholder="/path/fullchain.pem"></label>
             <label class="field"><span>TLS 私钥</span><input id="private-key" required placeholder="/path/privkey.pem"></label>
           </div>
@@ -154,21 +155,6 @@
           </div>
         </section>
 
-        <section class="config-section" id="masquerade" aria-labelledby="masquerade-title">
-          <div class="section-heading"><h2 id="masquerade-title">Masquerade</h2></div>
-          <div class="masquerade-mode-row">
-            <label class="field"><span>处理方式</span>
-              <select id="masquerade-type">
-                <option value="none">默认 404</option>
-                <option value="string">固定响应</option>
-                <option value="file">目录服务</option>
-                <option value="proxy">反向代理</option>
-              </select>
-            </label>
-          </div>
-          <div id="masquerade-fields"></div>
-        </section>
-
         <section class="config-section" id="startup" aria-labelledby="startup-title">
           <div class="section-heading startup-heading">
             <h2 id="startup-title">系统启动</h2>
@@ -184,6 +170,78 @@
             <div class="startup-path"><span>程序位置</span><strong id="startup-executable-path">--</strong></div>
             <div class="startup-path startup-wide"><span>配置位置</span><strong id="startup-config-path">--</strong></div>
           </div>
+        </section>
+
+        <div class="mobile-save">
+          <button class="button primary" type="submit">保存并应用</button>
+        </div>
+        </div>
+
+        <div class="page-panel" data-page="reverse-proxy">
+        <section class="config-section" id="reverse-tunnel" aria-labelledby="reverse-tunnel-title">
+          <div class="section-heading reverse-heading">
+            <h2 id="reverse-tunnel-title">持续通道</h2>
+            <span class="service-state waiting" id="reverse-runtime-state"><i></i><span>检测中</span></span>
+          </div>
+          <div class="reverse-status-grid">
+            <div><span>运行模式</span><strong id="reverse-status-role">--</strong></div>
+            <div><span>运行时长</span><strong id="reverse-status-uptime">--</strong></div>
+            <div><span>本机设备名称</span><strong id="reverse-status-node-name">--</strong></div>
+            <div class="reverse-status-wide"><span>最近错误</span><strong id="reverse-status-error">无</strong></div>
+          </div>
+          <div class="reverse-node-panel hidden" id="reverse-node-panel">
+            <div class="reverse-node-heading">
+              <h3>已接入出口节点</h3>
+              <span id="reverse-node-count">0 个在线</span>
+            </div>
+            <div class="reverse-node-list" id="reverse-node-list"></div>
+          </div>
+          <div class="reverse-control-grid">
+            <label class="field"><span>通道角色</span>
+              <select id="reverse-mode">
+                <option value="disabled">不启用</option>
+                <option value="gateway">中转端</option>
+                <option value="client">出口端</option>
+              </select>
+            </label>
+          </div>
+          <div class="reverse-role-fields" id="reverse-client-fields">
+            <div class="field-grid three">
+              <label class="field wide"><span>中转端地址</span><input id="reverse-gateway" placeholder="gateway.example.com:7000"></label>
+              <label class="field"><span>本地服务端口</span><input id="reverse-local-port" type="number" min="1" max="65535" step="1"></label>
+              <label class="field"><span>持续连接数</span><input id="reverse-pool-size" type="number" min="1" max="64" step="1"></label>
+            </div>
+            <label class="field reverse-subscription-field"><span>出口节点订阅地址</span><input id="reverse-subscription-url" type="url" maxlength="2048" placeholder="自动采用当前设备的长期订阅地址"></label>
+          </div>
+          <div class="reverse-role-fields hidden" id="reverse-gateway-fields">
+            <div class="field-grid three">
+              <label class="field"><span>通道监听端口</span><input id="reverse-tunnel-port" type="number" min="1" max="65535" step="1"></label>
+              <label class="field"><span>公网入口端口</span><input id="reverse-public-port" type="number" min="1" max="65535" step="1"></label>
+              <label class="field"><span>等待队列</span><input id="reverse-queue-capacity" type="number" min="1" max="1024" step="1"></label>
+            </div>
+          </div>
+          <div class="reverse-token-row hidden" id="reverse-token-fields">
+            <label class="field"><span>通道令牌</span><input id="reverse-token" type="password" autocomplete="new-password" minlength="16" maxlength="256"></label>
+            <div class="reverse-token-actions">
+              <label class="check"><input id="reverse-show-token" type="checkbox"><span>显示令牌</span></label>
+              <button class="button secondary compact" id="reverse-generate-token" type="button">生成令牌</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="config-section" id="masquerade" aria-labelledby="masquerade-title">
+          <div class="section-heading"><h2 id="masquerade-title">Masquerade</h2></div>
+          <div class="masquerade-mode-row">
+            <label class="field"><span>处理方式</span>
+              <select id="masquerade-type">
+                <option value="none">默认 404</option>
+                <option value="string">固定响应</option>
+                <option value="file">目录服务</option>
+                <option value="proxy">反向代理</option>
+              </select>
+            </label>
+          </div>
+          <div id="masquerade-fields"></div>
         </section>
 
         <div class="mobile-save">
@@ -256,7 +314,7 @@
         </div>
         <label class="field">
           <span>节点或 Base64 订阅</span>
-          <textarea class="converter-source" id="converter-source" spellcheck="false" placeholder="粘贴 SS、VMess、VLESS、Trojan、Hysteria2、TUIC 或 AnyTLS 链接"></textarea>
+          <textarea class="converter-source" id="converter-source" spellcheck="false" placeholder="粘贴 SS、VMess、VLESS、Hysteria2 或 TUIC 链接"></textarea>
         </label>
         <div class="field-grid two converter-rules">
           <label class="field">

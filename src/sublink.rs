@@ -271,6 +271,8 @@ struct Node {
     obfs: String,
     obfs_password: String,
     flow: String,
+    packet_encoding: String,
+    udp: bool,
     original: String,
     tls: bool,
     insecure: bool,
@@ -295,6 +297,8 @@ impl Node {
             obfs: String::new(),
             obfs_password: String::new(),
             flow: String::new(),
+            packet_encoding: String::new(),
+            udp: false,
             original: original.to_owned(),
             tls: false,
             insecure: false,
@@ -616,7 +620,7 @@ impl SublinkService {
             nodes.first().is_some_and(|node| node.kind == "hysteria2")
                 && nodes
                     .iter()
-                    .all(|node| matches!(node.kind.as_str(), "hysteria2" | "trojan")),
+                    .all(|node| matches!(node.kind.as_str(), "hysteria2" | "vless")),
             "invalid HY2 URL parameter"
         );
         ensure!(
@@ -718,6 +722,28 @@ impl SublinkService {
         accept: &str,
         requested_format: Option<&str>,
     ) -> Result<SublinkOutput> {
+        self.auto_with_overrides(
+            code,
+            user_agent,
+            accept,
+            requested_format,
+            None,
+            None,
+            false,
+        )
+        .await
+    }
+
+    pub async fn auto_with_overrides(
+        &self,
+        code: &str,
+        user_agent: &str,
+        accept: &str,
+        requested_format: Option<&str>,
+        server_override: Option<&str>,
+        port_override: Option<u16>,
+        tcp_only: bool,
+    ) -> Result<SublinkOutput> {
         ensure!(valid_code(code), "invalid short URL");
         let query = self
             .store
@@ -727,7 +753,10 @@ impl SublinkService {
             .ok_or_else(|| anyhow!("short URL not found"))?;
         let url = Url::parse(&format!("https://short.local/xray{query}"))
             .map_err(|_| anyhow!("invalid short URL"))?;
-        let config = query_value(&url, &["config"]);
+        let mut config = query_value(&url, &["config"]);
+        if server_override.is_some() || port_override.is_some() || tcp_only {
+            config = rewrite_subscription_input(&config, server_override, port_override, tcp_only)?;
+        }
         let selected_rules = query_value_optional(&url, &["selectedRules"]);
         let ad_block = query_bool(&url, &["adblock"]);
         let whitelist = query_value_optional(&url, &["whitelist"]);
@@ -760,6 +789,38 @@ impl SublinkService {
         let origin = url.origin().ascii_serialization();
         Ok(json!({ "originalUrl": format!("{origin}/{format}{query}") }).to_string())
     }
+}
+
+fn rewrite_subscription_input(
+    input: &str,
+    server_override: Option<&str>,
+    port_override: Option<u16>,
+    tcp_only: bool,
+) -> Result<String> {
+    ensure!(
+        server_override.is_some() == port_override.is_some(),
+        "subscription server and port overrides must be used together"
+    );
+    let nodes = parse_input(input)?;
+    let mut rewritten = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        if tcp_only && node.kind != "vless" {
+            continue;
+        }
+        let mut url = Url::parse(&node.original).map_err(|_| anyhow!("invalid proxy URI"))?;
+        if let (Some(server), Some(port)) = (server_override, port_override) {
+            url.set_host(Some(server))
+                .map_err(|_| anyhow!("invalid subscription server override"))?;
+            url.set_port(Some(port))
+                .map_err(|_| anyhow!("invalid subscription port override"))?;
+        }
+        rewritten.push(url.to_string());
+    }
+    ensure!(
+        !rewritten.is_empty(),
+        "subscription contains no compatible TCP nodes"
+    );
+    Ok(rewritten.join("\n"))
 }
 
 pub struct SublinkOutput {
@@ -990,7 +1051,7 @@ fn parse_node(uri: &str) -> Result<Node> {
     match scheme.as_str() {
         "ss" => parse_shadowsocks(uri),
         "vmess" => parse_vmess(uri),
-        "vless" | "trojan" | "hysteria2" | "tuic" | "anytls" => parse_url_node(uri, &scheme),
+        "vless" | "hysteria2" | "tuic" => parse_url_node(uri, &scheme),
         "hy2" | "hysteria" => parse_url_node(uri, "hysteria2"),
         _ => bail!("unsupported proxy URI"),
     }
@@ -1017,7 +1078,7 @@ fn parse_url_node(uri: &str, kind: &str) -> Result<Node> {
             node.uuid = node.username.clone();
             node.password = url_password;
         }
-        "trojan" | "hysteria2" | "anytls" => {
+        "hysteria2" => {
             node.password = if url_password.is_empty() {
                 node.username.clone()
             } else {
@@ -1039,6 +1100,12 @@ fn parse_url_node(uri: &str, kind: &str) -> Result<Node> {
     node.service_name = query_value(&url, &["serviceName"]);
     node.sni = query_value(&url, &["sni"]);
     node.flow = query_value(&url, &["flow"]);
+    if let Some(packet_encoding) =
+        query_value_optional(&url, &["packetEncoding", "packet-encoding"])
+    {
+        node.packet_encoding = packet_encoding;
+        node.udp = true;
+    }
     node.obfs = query_value(&url, &["obfs"]);
     node.obfs_password = query_value(&url, &["obfs-password", "obfsPassword"]);
     let security = query_value(&url, &["security"]);
@@ -1056,7 +1123,7 @@ fn parse_url_node(uri: &str, kind: &str) -> Result<Node> {
     }
     ensure!(
         !(matches!(kind, "vless" | "tuic") && node.uuid.is_empty()
-            || matches!(kind, "trojan" | "hysteria2" | "anytls") && node.password.is_empty()),
+            || kind == "hysteria2" && node.password.is_empty()),
         "proxy credentials are missing"
     );
     Ok(node)
@@ -1272,15 +1339,13 @@ fn render_singbox(
                     "type": "https",
                     "tag": "dns-cn-ali",
                     "server": "dns.alidns.com",
-                    "domain_resolver": "dns-local",
-                    "detour": "DIRECT"
+                    "domain_resolver": "dns-local"
                 },
                 {
                     "type": "https",
                     "tag": "dns-cn-tencent",
                     "server": "doh.pub",
-                    "domain_resolver": "dns-local",
-                    "detour": "DIRECT"
+                    "domain_resolver": "dns-local"
                 },
                 {
                     "type": "https",
@@ -1399,6 +1464,14 @@ fn singbox_node(node: &Node) -> Value {
             if !node.flow.is_empty() {
                 output.insert("flow".to_owned(), json!(node.flow));
             }
+            if node.udp {
+                let packet_encoding = if node.packet_encoding.eq_ignore_ascii_case("none") {
+                    ""
+                } else {
+                    &node.packet_encoding
+                };
+                output.insert("packet_encoding".to_owned(), json!(packet_encoding));
+            }
         }
         "tuic" => {
             output.insert("uuid".to_owned(), json!(node.uuid));
@@ -1465,7 +1538,20 @@ fn render_clash(
                 yaml_field(&mut output, "cipher", &node.method);
                 yaml_field(&mut output, "password", &node.password);
             }
-            "vmess" | "vless" => yaml_field(&mut output, "uuid", &node.uuid),
+            "vmess" | "vless" => {
+                yaml_field(&mut output, "uuid", &node.uuid);
+                if node.kind == "vless" {
+                    let _ = writeln!(output, "    udp: {}", node.udp);
+                    if node.udp {
+                        let packet_encoding = if node.packet_encoding.eq_ignore_ascii_case("none") {
+                            ""
+                        } else {
+                            &node.packet_encoding
+                        };
+                        yaml_field(&mut output, "packet-encoding", packet_encoding);
+                    }
+                }
+            }
             "tuic" => {
                 yaml_field(&mut output, "uuid", &node.uuid);
                 yaml_field(&mut output, "password", &node.password);
@@ -1669,19 +1755,19 @@ fn render_surge(
 }
 
 fn proxy_node_names(nodes: &[Node]) -> Vec<String> {
-    let dual_tcp_fallback = nodes.len() == 2
+    let shared_tcp_fallback = nodes.len() >= 2
         && nodes.iter().any(|node| node.kind == "hysteria2")
-        && nodes.iter().any(|node| node.kind == "trojan")
-        && nodes[0].server == nodes[1].server
-        && nodes[0].port == nodes[1].port
-        && nodes[0].password == nodes[1].password;
-    if !dual_tcp_fallback {
+        && nodes.iter().any(|node| node.kind == "vless")
+        && nodes
+            .iter()
+            .all(|node| node.server == nodes[0].server && node.port == nodes[0].port);
+    if !shared_tcp_fallback {
         return nodes.iter().map(|node| node.name.clone()).collect();
     }
     nodes
         .iter()
-        .filter(|node| node.kind == "trojan")
-        .chain(nodes.iter().filter(|node| node.kind != "trojan"))
+        .filter(|node| node.kind == "vless")
+        .chain(nodes.iter().filter(|node| node.kind == "hysteria2"))
         .map(|node| node.name.clone())
         .collect()
 }
@@ -1816,6 +1902,22 @@ mod tests {
     const VLESS: &str = "vless://12345678-1234-1234-1234-123456789012@example.com:443?type=ws&security=tls&path=%2Fws&host=edge.example.com#smoke";
 
     #[test]
+    fn relay_subscription_rewrites_endpoint_and_keeps_only_tcp_nodes() {
+        let hy2 = "hysteria2://password@exit.example:51400/?sni=exit.example#user";
+        let rewritten = rewrite_subscription_input(
+            &format!("{hy2}\n{VLESS}"),
+            Some("relay.example"),
+            Some(52000),
+            true,
+        )
+        .unwrap();
+        assert!(!rewritten.contains("hysteria2://"));
+        assert!(rewritten.contains("@relay.example:52000"));
+        assert!(rewritten.contains("security=tls"));
+        assert!(rewritten.contains("#smoke"));
+    }
+
+    #[test]
     fn converts_vless_to_singbox_and_clash() {
         let service = SublinkService::default();
         let singbox = service.convert("singbox", VLESS).unwrap().body;
@@ -1825,6 +1927,22 @@ mod tests {
         let clash = service.convert("clash", VLESS).unwrap().body;
         assert!(clash.contains("type: 'vless'"));
         assert!(clash.contains("Host: 'edge.example.com'"));
+    }
+
+    #[test]
+    fn preserves_standard_vless_packet_encoding_for_imported_nodes() {
+        let node = "vless://12345678-1234-1234-1234-123456789012@example.com:51400?encryption=none&security=tls&type=tcp&sni=example.com&packetEncoding=none#vless-native";
+        let service = SublinkService::default();
+        let singbox = service.convert("singbox", node).unwrap().body;
+        let parsed: Value = serde_json::from_str(&singbox).unwrap();
+        assert_eq!(parsed["outbounds"][0]["tag"], "vless-native");
+        assert_eq!(parsed["outbounds"][0]["type"], "vless");
+        assert_eq!(parsed["outbounds"][0]["packet_encoding"], "");
+
+        let clash = service.convert("clash", node).unwrap().body;
+        assert!(clash.contains("name: 'vless-native'"));
+        assert!(clash.contains("udp: true"));
+        assert!(clash.contains("packet-encoding: ''"));
     }
 
     #[test]
@@ -1846,7 +1964,7 @@ mod tests {
         );
         let shadowsocks = STANDARD.encode("aes-128-gcm:secret");
         let input = format!(
-            "ss://{shadowsocks}@ss.example.com:8388#ss\nvmess://{vmess}\n{VLESS}\ntrojan://secret@trojan.example.com:443#trojan\nhysteria2://secret@hy2.example.com:443#hy2\ntuic://12345678-1234-1234-1234-123456789012:secret@tuic.example.com:443#tuic\nanytls://secret@anytls.example.com:443#anytls"
+            "ss://{shadowsocks}@ss.example.com:8388#ss\nvmess://{vmess}\n{VLESS}\nhysteria2://secret@hy2.example.com:443#hy2\ntuic://12345678-1234-1234-1234-123456789012:secret@tuic.example.com:443#tuic"
         );
         let output = SublinkService::default()
             .convert("singbox", &input)
@@ -1857,20 +1975,12 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .take(7)
+            .take(5)
             .map(|outbound| outbound["type"].as_str().unwrap())
             .collect::<Vec<_>>();
         assert_eq!(
             types,
-            [
-                "shadowsocks",
-                "vmess",
-                "vless",
-                "trojan",
-                "hysteria2",
-                "tuic",
-                "anytls"
-            ]
+            ["shadowsocks", "vmess", "vless", "hysteria2", "tuic"]
         );
     }
 
@@ -1916,27 +2026,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn permanent_hy2_link_upgrades_to_dual_protocol_without_changing_code() {
+    async fn permanent_hy2_link_adds_vless_without_changing_code() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("dual-protocol-links.toml");
+        let path = directory.path().join("hy2-vless-links.toml");
         let hy2 = "hysteria2://password@example.com:443/?sni=example.com#user";
-        let trojan = "trojan://password@example.com:443?sni=example.com#user-TCP";
+        let vless = "vless://2bb80d53-7b1d-43e3-8bd3-0361aa855686@example.com:443?encryption=none&security=tls&sni=example.com&type=tcp#user-VLESS";
         let service = SublinkService::with_persistence(path).unwrap();
         let hy2_url = format!(
             "https://example.com/xray?config={}",
             url::form_urlencoded::byte_serialize(hy2.as_bytes()).collect::<String>()
         );
         let code = service.shorten_hy2(&hy2_url).await.unwrap();
-        let dual = format!("{hy2}\n{trojan}");
-        let dual_url = format!(
+        let protocols = format!("{hy2}\n{vless}");
+        let protocols_url = format!(
             "https://example.com/xray?config={}",
-            url::form_urlencoded::byte_serialize(dual.as_bytes()).collect::<String>()
+            url::form_urlencoded::byte_serialize(protocols.as_bytes()).collect::<String>()
         );
-        assert_eq!(service.shorten_hy2(&dual_url).await.unwrap(), code);
+        assert_eq!(service.shorten_hy2(&protocols_url).await.unwrap(), code);
 
         let output = service.auto(&code, "sing-box/1.14", "").await.unwrap();
         assert!(output.body.contains("\"type\":\"hysteria2\""));
-        assert!(output.body.contains("\"type\":\"trojan\""));
+        assert!(output.body.contains("\"type\":\"vless\""));
         let document: Value = serde_json::from_str(&output.body).unwrap();
         let selector = document["outbounds"]
             .as_array()
@@ -1944,7 +2054,16 @@ mod tests {
             .iter()
             .find(|outbound| outbound["tag"] == "PROXY")
             .unwrap();
-        assert_eq!(selector["outbounds"], json!(["user-TCP", "user"]));
+        assert_eq!(selector["outbounds"], json!(["user-VLESS", "user"]));
+
+        let clash = service
+            .auto(&code, "clash-verge/v2.4", "")
+            .await
+            .unwrap()
+            .body;
+        assert!(clash.contains("type: 'vless'"));
+        assert!(clash.contains("    udp: false"));
+        assert!(clash.contains("sni: 'example.com'"));
     }
 
     #[tokio::test]
@@ -2219,6 +2338,8 @@ mod tests {
             .body;
         let singbox: Value = serde_json::from_str(&singbox).unwrap();
         assert_eq!(singbox["dns"]["final"], "dns-global");
+        assert!(singbox["dns"]["servers"][1].get("detour").is_none());
+        assert!(singbox["dns"]["servers"][2].get("detour").is_none());
         assert_eq!(singbox["dns"]["servers"][3]["detour"], "PROXY");
         assert!(singbox.to_string().contains("dns-cn-ali"));
         assert!(singbox.to_string().contains("dns-cn-tencent"));

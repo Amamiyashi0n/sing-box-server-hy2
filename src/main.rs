@@ -1,12 +1,14 @@
 use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use sing_box_ser_mini::config::Config;
 
 #[derive(Debug, Parser)]
-#[command(about = "Minimal Hysteria 2 and Trojan server implementation")]
+#[command(about = "Minimal Hysteria 2 and VLESS server with a Rust WebUI")]
 struct Args {
+    #[command(subcommand)]
+    command: Option<Command>,
     #[arg(short, long, default_value = "config.toml")]
     config: PathBuf,
     #[arg(long, help = "Validate configuration without opening service sockets")]
@@ -25,6 +27,32 @@ struct Args {
     no_admin: bool,
     #[arg(long, help = "Tokio runtime worker threads (default: up to 4)")]
     worker_threads: Option<usize>,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    #[command(about = "Expose a TCP service through preconnected NAT tunnel clients")]
+    NatGateway {
+        #[arg(long, default_value = "0.0.0.0:7000")]
+        tunnel_listen: String,
+        #[arg(long, default_value = "0.0.0.0:51400")]
+        public_listen: String,
+        #[arg(long)]
+        token_file: PathBuf,
+        #[arg(long, default_value_t = 64)]
+        queue_capacity: usize,
+    },
+    #[command(about = "Maintain outbound TCP tunnels from a NAT host to a gateway")]
+    NatClient {
+        #[arg(long)]
+        gateway: String,
+        #[arg(long, default_value = "127.0.0.1:51400")]
+        local: String,
+        #[arg(long)]
+        token_file: PathBuf,
+        #[arg(long, default_value_t = 4)]
+        pool_size: usize,
+    },
 }
 
 fn main() -> Result<()> {
@@ -52,6 +80,45 @@ fn main() -> Result<()> {
 }
 
 async fn run(args: Args, worker_threads: usize) -> Result<()> {
+    if let Some(command) = args.command {
+        return match command {
+            Command::NatGateway {
+                tunnel_listen,
+                public_listen,
+                token_file,
+                queue_capacity,
+            } => {
+                sing_box_ser_mini::nat_tunnel::run_gateway(
+                    sing_box_ser_mini::nat_tunnel::GatewayOptions {
+                        tunnel_listen,
+                        public_listen,
+                        token: sing_box_ser_mini::nat_tunnel::read_token(&token_file)?,
+                        queue_capacity,
+                        tracker: sing_box_ser_mini::nat_tunnel::GatewayTracker::default(),
+                    },
+                )
+                .await
+            }
+            Command::NatClient {
+                gateway,
+                local,
+                token_file,
+                pool_size,
+            } => {
+                sing_box_ser_mini::nat_tunnel::run_client(
+                    sing_box_ser_mini::nat_tunnel::ClientOptions {
+                        gateway,
+                        local,
+                        token: sing_box_ser_mini::nat_tunnel::read_token(&token_file)?,
+                        pool_size,
+                        node_name: sing_box_ser_mini::nat_tunnel::system_device_name(),
+                        subscription_url: String::new(),
+                    },
+                )
+                .await
+            }
+        };
+    }
     if args.reset_admin_password {
         let credentials = sing_box_ser_mini::admin::reset_credentials(
             &args.admin_credentials_file,
@@ -68,7 +135,7 @@ async fn run(args: Args, worker_threads: usize) -> Result<()> {
     let config = Config::load(&args.config)?;
     if args.check {
         println!(
-            "HY2 and Trojan server configuration is valid: listen={}, users={}",
+            "HY2 and VLESS server configuration is valid: listen={}, users={}",
             config.listen,
             config.users.len()
         );

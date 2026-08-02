@@ -20,9 +20,11 @@ const state = {
   trafficSamples: new Map(),
   trafficHistory: [],
   networkCapabilities: null,
+  reverseProxy: null,
   shareShortLinks: new Map(),
   shareShortLinkErrors: new Map(),
   shareShortLinksPending: new Set(),
+  vlessUserIds: new Map(),
   shareRulePreset: "balanced",
   shareAdBlock: false,
   converter: {
@@ -40,10 +42,11 @@ const PAGE_TITLES = {
   overview: "概览",
   service: "服务配置",
   users: "用户与链接",
+  "reverse-proxy": "反向代理",
   admin: "管理账户",
   converter: "订阅转换"
 };
-const PAGE_ALIASES = { overview: "overview", network: "service", transport: "service", masquerade: "service", service: "service", users: "users", links: "users", admin: "admin", "admin-users": "admin", converter: "converter" };
+const PAGE_ALIASES = { overview: "overview", network: "service", transport: "service", service: "service", users: "users", links: "users", "reverse-proxy": "reverse-proxy", masquerade: "reverse-proxy", admin: "admin", "admin-users": "admin", converter: "converter" };
 
 function basicAuthorization(username, password) {
   const bytes = new TextEncoder().encode(`${username}:${password}`);
@@ -148,9 +151,10 @@ function activatePage(page, updateHash = true) {
     link.classList.toggle("active", link.dataset.page === activePage);
   });
   $("#page-title").textContent = PAGE_TITLES[activePage];
-  $("#save").classList.toggle("hidden", !["service", "users"].includes(activePage));
+  $("#save").classList.toggle("hidden", !["service", "users", "reverse-proxy"].includes(activePage));
   if (updateHash && window.location.hash !== `#${activePage}`) history.replaceState(null, "", `#${activePage}`);
   if (activePage === "overview") requestAnimationFrame(drawTrafficChart);
+  if (activePage === "reverse-proxy" && state.username) loadReverseProxy(false);
 }
 
 function toast(message, error = false) {
@@ -390,6 +394,141 @@ async function loadNetworkCapabilities() {
   }
 }
 
+function toggleReverseRole() {
+  const role = $("#reverse-mode").value;
+  $("#reverse-client-fields").classList.toggle("hidden", role !== "client");
+  $("#reverse-gateway-fields").classList.toggle("hidden", role !== "gateway");
+  $("#reverse-token-fields").classList.toggle("hidden", role === "disabled");
+  $("#reverse-gateway").required = role === "client";
+  if (role === "client") suggestReverseSubscriptionUrl();
+}
+
+function suggestReverseSubscriptionUrl() {
+  const field = $("#reverse-subscription-url");
+  if (!field || field.value.trim() || !state.config) return;
+  const item = currentShareLinks()[0];
+  const suggestion = item && state.shareShortLinks.get(item.link);
+  if (suggestion) field.value = suggestion;
+}
+
+function formatNodeTime(timestamp, online) {
+  if (!timestamp) return online ? "刚刚接入" : "未知";
+  const label = online ? "接入于" : "最后在线";
+  return `${label} ${new Date(timestamp * 1000).toLocaleString("zh-CN", { hour12: false })}`;
+}
+
+function renderReverseNodes(status) {
+  const settings = status.settings || {};
+  const panel = $("#reverse-node-panel");
+  const isGateway = Boolean(settings.enabled && settings.role === "gateway");
+  panel.classList.toggle("hidden", !isGateway);
+  if (!isGateway) return;
+  const nodes = status.connected_nodes || [];
+  const onlineCount = nodes.filter(node => node.online).length;
+  $("#reverse-node-count").textContent = `${onlineCount} 个在线`;
+  const list = $("#reverse-node-list");
+  if (!nodes.length) {
+    list.innerHTML = '<div class="reverse-node-empty">暂时没有出口节点接入</div>';
+    return;
+  }
+  const relayLinks = nodes.map(node => {
+    if (!node.subscription_url) return "";
+    try {
+      const url = new URL(node.subscription_url);
+      url.searchParams.set("server", window.location.hostname);
+      url.searchParams.set("port", String(settings.public_port));
+      url.searchParams.set("tcp_only", "1");
+      return url.toString();
+    } catch {
+      return "";
+    }
+  });
+  list.innerHTML = nodes.map((node, index) => `
+    <div class="reverse-node-row ${node.online ? "online" : "offline"}">
+      <div class="reverse-node-identity"><i></i><strong>${escapeHtml(node.name || "未命名设备")}</strong></div>
+      <span class="reverse-node-tunnels">${node.online ? `${Number(node.tunnel_count) || 0} 条通道` : "已离线"}</span>
+      <span class="reverse-node-time">${escapeHtml(formatNodeTime(node.online ? node.connected_since : node.last_seen, node.online))}</span>
+      <div class="reverse-node-subscription">
+        <span>中转订阅</span>
+        <input readonly value="${escapeHtml(relayLinks[index])}" placeholder="出口端尚未上报订阅地址">
+        <button class="button secondary compact" data-copy-reverse-subscription="${index}" type="button" ${relayLinks[index] ? "" : "disabled"}>复制</button>
+      </div>
+    </div>
+  `).join("");
+  list.querySelectorAll("[data-copy-reverse-subscription]").forEach(button => button.addEventListener("click", async () => {
+    const link = relayLinks[Number(button.dataset.copyReverseSubscription)];
+    if (!link) return;
+    try {
+      await copyText(link);
+      toast("中转订阅已复制");
+    } catch {
+      toast("复制失败，请手动选择链接", true);
+    }
+  }));
+}
+
+function renderReverseProxy(status, fillForm = true) {
+  state.reverseProxy = status;
+  const settings = status.settings || {};
+  const runtime = $("#reverse-runtime-state");
+  const failed = Boolean(settings.enabled && status.last_error);
+  runtime.className = `service-state ${status.running ? "online" : failed ? "offline" : "waiting"}`;
+  runtime.lastElementChild.textContent = status.running ? "运行中" : failed ? "启动失败" : settings.enabled ? "已停止" : "未启用";
+  $("#reverse-status-role").textContent = settings.enabled
+    ? ({ client: "出口端", gateway: "中转端" }[settings.role] || "--")
+    : "关闭";
+  $("#reverse-status-uptime").textContent = status.running ? formatUptime(status.uptime_secs) : "--";
+  $("#reverse-status-node-name").textContent = status.local_node_name || "--";
+  $("#reverse-status-error").textContent = status.last_error || "无";
+  $("#reverse-status-error").classList.toggle("error", Boolean(status.last_error));
+  renderReverseNodes(status);
+  if (!fillForm) return;
+  $("#reverse-mode").value = settings.enabled ? settings.role || "client" : "disabled";
+  $("#reverse-gateway").value = settings.gateway || "";
+  $("#reverse-tunnel-port").value = settings.tunnel_port ?? 7000;
+  $("#reverse-public-port").value = settings.public_port ?? 51400;
+  $("#reverse-local-port").value = settings.local_port ?? listenPort(state.config?.listen) ?? 51400;
+  $("#reverse-pool-size").value = settings.pool_size ?? 4;
+  $("#reverse-queue-capacity").value = settings.queue_capacity ?? 64;
+  $("#reverse-token").value = settings.token || "";
+  $("#reverse-subscription-url").value = settings.subscription_url || "";
+  toggleReverseRole();
+}
+
+async function loadReverseProxy(fillForm = true) {
+  try {
+    renderReverseProxy(await api("/api/v1/reverse-proxy"), fillForm);
+  } catch (error) {
+    const runtime = $("#reverse-runtime-state");
+    runtime.className = "service-state offline";
+    runtime.lastElementChild.textContent = "检测失败";
+    $("#reverse-status-error").textContent = error.message;
+    $("#reverse-status-error").classList.add("error");
+  }
+}
+
+function collectReverseProxy() {
+  const mode = $("#reverse-mode").value;
+  return {
+    enabled: mode !== "disabled",
+    role: mode === "gateway" ? "gateway" : "client",
+    gateway: $("#reverse-gateway").value.trim(),
+    tunnel_port: Number($("#reverse-tunnel-port").value),
+    public_port: Number($("#reverse-public-port").value),
+    local_port: Number($("#reverse-local-port").value),
+    pool_size: Number($("#reverse-pool-size").value),
+    queue_capacity: Number($("#reverse-queue-capacity").value),
+    token: $("#reverse-token").value,
+    subscription_url: $("#reverse-subscription-url").value.trim()
+  };
+}
+
+function generateReverseToken() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  $("#reverse-token").value = [...bytes].map(byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
 async function loadStatus() {
   try {
     const status = await api("/api/v1/status");
@@ -412,14 +551,19 @@ async function loadStatus() {
     $("#updated-at").textContent = `同步于 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
     $("#runtime-error").textContent = status.last_error || "";
     $("#runtime-error").classList.toggle("hidden", !status.last_error);
+    if (pageFromHash() === "reverse-proxy") await loadReverseProxy(false);
   } catch (error) {
     if (!loginScreenVisible()) toast(error.message, true);
   }
 }
 
 async function loadConfig() {
-  const config = await api("/api/v1/config");
+  const [config, vless] = await Promise.all([
+    api("/api/v1/config"),
+    api("/api/v1/vless-users")
+  ]);
   state.config = config;
+  state.vlessUserIds = new Map((vless.users || []).map(user => [user.name, user.uuid]));
   $("#listen-port").value = listenPort(config.listen) ?? 443;
   $("#certificate").value = config.tls?.certificate || "";
   $("#private-key").value = config.tls?.private_key || "";
@@ -576,7 +720,7 @@ function renderUsers(users) {
   list.innerHTML = users.map((user, index) => `
     <div class="user-row" data-user-row>
       <label class="field"><span class="user-index">USER ${String(index + 1).padStart(2, "0")}</span><input data-user-name required value="${escapeHtml(user.name || "")}" placeholder="用户名"></label>
-      <label class="field"><span>共享密码</span><input data-user-password required type="password" value="${escapeHtml(user.password || "")}" placeholder="HY2 / Trojan 密码"></label>
+      <label class="field"><span>共享密码</span><input data-user-password required type="password" value="${escapeHtml(user.password || "")}" placeholder="HY2 密码，自动派生 VLESS UUID"></label>
       <div class="user-row-actions">
         <button class="button secondary compact" data-generate-user-password type="button">随机密码</button>
         <button class="button danger compact" data-remove-user type="button">移除</button>
@@ -658,17 +802,17 @@ function buildHy2ShareLink(user, server) {
   return `hysteria2://${encodeUserInfo(user.password)}@${shareHost(server)}:${port}/?${parameters}${fragment}`;
 }
 
-function buildTrojanShareLink(user, server) {
+function buildVlessShareLink(user, server) {
   const port = Number($("#share-port").value);
-  if (!server || !port || !user.password) return "";
-  const query = new URLSearchParams();
+  const uuid = state.vlessUserIds.get(user.name);
+  const savedUser = (state.config?.users || []).find(item => item.name === user.name);
+  if (!server || !port || !uuid || savedUser?.password !== user.password) return "";
+  const query = new URLSearchParams({ encryption: "none", security: "tls", type: "tcp" });
   const sni = $("#share-sni").value.trim();
   if (sni) query.set("sni", sni);
   if ($("#share-insecure").checked) query.set("allowInsecure", "1");
-  const parameters = query.toString();
-  const name = user.name ? `${user.name}-TCP` : "TCP";
-  const suffix = `${parameters ? `?${parameters}` : ""}#${encodeURIComponent(name)}`;
-  return `trojan://${encodeUserInfo(user.password)}@${shareHost(server)}:${port}${suffix}`;
+  const name = user.name ? `${user.name}-VLESS` : "VLESS";
+  return `vless://${uuid}@${shareHost(server)}:${port}?${query.toString()}#${encodeURIComponent(name)}`;
 }
 
 function currentShareLinks() {
@@ -678,9 +822,9 @@ function currentShareLinks() {
   ].filter(item => item.server);
   return collectUsers(false).flatMap(user => servers.map(({ family, server }) => {
     const link = buildHy2ShareLink(user, server);
-    const trojan = buildTrojanShareLink(user, server);
-    return { user, family, link, trojan, subscription: [link, trojan].filter(Boolean).join("\n") };
-  })).filter(item => item.link && item.trojan);
+    const vless = buildVlessShareLink(user, server);
+    return { user, family, link, vless, subscription: [link, vless].filter(Boolean).join("\n") };
+  })).filter(item => item.link && item.vless);
 }
 
 function renderShareRuleOptions() {
@@ -709,19 +853,19 @@ function renderShareLinks() {
         <div class="share-protocol-name">HY2</div>
         <div class="share-link-fields">
           <div class="share-link-line">
-            <span>${item.family} 连接</span>
+            <span>${item.family} UDP</span>
             <input aria-label="${escapeHtml(item.user.name || "用户")} HY2 ${item.family} 连接" readonly value="${escapeHtml(item.link)}">
             <button class="button secondary compact" data-copy-link="${index}" data-link-kind="hy2" type="button">复制</button>
           </div>
         </div>
       </div>
       <div class="share-protocol">
-        <div class="share-protocol-name">Trojan</div>
+        <div class="share-protocol-name">VLESS</div>
         <div class="share-link-fields">
           <div class="share-link-line">
             <span>${item.family} TCP</span>
-            <input aria-label="${escapeHtml(item.user.name || "用户")} Trojan ${item.family} 连接" readonly value="${escapeHtml(item.trojan)}">
-            <button class="button secondary compact" data-copy-link="${index}" data-link-kind="trojan" type="button">复制</button>
+            <input aria-label="${escapeHtml(item.user.name || "用户")} VLESS ${item.family} 连接" readonly value="${escapeHtml(item.vless)}" placeholder="保存后生成">
+            <button class="button secondary compact" data-copy-link="${index}" data-link-kind="vless" type="button" ${item.vless ? "" : "disabled"}>复制</button>
           </div>
           <div class="share-link-line">
             <span>双协议订阅</span>
@@ -737,12 +881,13 @@ function renderShareLinks() {
     const item = links[Number(button.dataset.copyLink)];
     const link = button.dataset.linkKind === "short"
       ? state.shareShortLinks.get(item.link)
-      : button.dataset.linkKind === "trojan" ? item.trojan : item.link;
+      : button.dataset.linkKind === "vless" ? item.vless : item.link;
     if (!link) return;
     try {
       await copyText(link);
       const message = button.dataset.linkKind === "short" ? "双协议短链接已复制"
-        : button.dataset.linkKind === "trojan" ? "Trojan TCP 连接已复制" : "HY2 连接已复制";
+        : button.dataset.linkKind === "vless" ? "VLESS TLS/TCP 连接已复制"
+          : "HY2 连接已复制";
       toast(message);
     } catch {
       toast("复制失败，请手动选择链接", true);
@@ -783,6 +928,7 @@ async function generateShareShortLinks() {
     }
   }));
   renderShareLinks();
+  suggestReverseSubscriptionUrl();
 }
 
 function toggleObfs() {
@@ -927,7 +1073,9 @@ function collectConfig() {
       ignore_client_bandwidth: $("#ignore-bandwidth").checked
     },
     udp: { enabled: $("#udp-enabled").checked, timeout_secs: Number($("#udp-timeout").value) },
-    outbound: { mode: $("#outbound-mode").value },
+    outbound: {
+      mode: $("#outbound-mode").value
+    },
     obfs: obfsEnabled ? { type: "salamander", password: $("#obfs-password").value } : null,
     masquerade: collectMasquerade(),
     share: {
@@ -960,12 +1108,19 @@ async function saveConfig(event) {
   button.disabled = true;
   try {
     const payload = collectConfig();
-    await api("/api/v1/config", { method: "PUT", body: JSON.stringify(payload) });
+    const reversePayload = collectReverseProxy();
+    const [, reverseStatus] = await Promise.all([
+      api("/api/v1/config", { method: "PUT", body: JSON.stringify(payload) }),
+      api("/api/v1/reverse-proxy", { method: "PUT", body: JSON.stringify(reversePayload) })
+    ]);
     state.config = payload;
+    renderReverseProxy(reverseStatus);
+    const vless = await api("/api/v1/vless-users");
+    state.vlessUserIds = new Map((vless.users || []).map(user => [user.name, user.uuid]));
     state.shareShortLinks.clear();
     state.shareShortLinkErrors.clear();
     await generateShareShortLinks();
-    toast("配置已保存，双协议服务正在重新加载");
+    toast("配置已保存，多协议服务正在重新加载");
     setTimeout(loadStatus, 450);
   } catch (error) { toast(error.message, true); }
   finally { button.disabled = false; }
@@ -987,6 +1142,11 @@ function bindEvents() {
   $("#save").addEventListener("click", saveConfig);
   $("#reload").addEventListener("click", reloadService);
   $("#startup-action").addEventListener("click", manageStartup);
+  $("#reverse-mode").addEventListener("change", toggleReverseRole);
+  $("#reverse-show-token").addEventListener("change", event => {
+    $("#reverse-token").type = event.target.checked ? "text" : "password";
+  });
+  $("#reverse-generate-token").addEventListener("click", generateReverseToken);
   $("#add-user").addEventListener("click", addUser);
   $("#obfs-enabled").addEventListener("change", toggleObfs);
   $("#show-passwords").addEventListener("change", applyPasswordVisibility);
@@ -1088,7 +1248,7 @@ function bindEvents() {
     $("#login-error").classList.add("hidden");
     try {
       await createAdminSession(username, password);
-      await Promise.all([loadConfig(), loadAdminUsers(), loadStartup(), loadNetworkCapabilities()]);
+      await Promise.all([loadConfig(), loadAdminUsers(), loadStartup(), loadNetworkCapabilities(), loadReverseProxy()]);
       closeLoginScreen();
       await loadStatus();
       startStatusPolling();
@@ -1113,7 +1273,7 @@ async function initialize() {
   activatePage(pageFromHash(), false);
   if (state.username && state.sessionExpiresAt * 1000 > Date.now()) {
     try {
-      await Promise.all([loadConfig(), loadAdminUsers(), loadStartup(), loadNetworkCapabilities()]);
+      await Promise.all([loadConfig(), loadAdminUsers(), loadStartup(), loadNetworkCapabilities(), loadReverseProxy()]);
       closeLoginScreen();
       await loadStatus();
       startStatusPolling();

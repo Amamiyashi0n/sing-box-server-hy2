@@ -31,6 +31,8 @@ use tracing::{info, warn};
 
 use crate::{
     config::{Config, OutboundMode},
+    outbound::OutboundConnector,
+    reverse_proxy::{ReverseProxyController, ReverseProxySettings, ReverseProxyStatus},
     server,
     startup::{self, StartupInputs, StartupStatus},
     sublink::SublinkService,
@@ -72,6 +74,7 @@ struct AdminState {
     webui_listen: Arc<String>,
     traffic: Arc<server::TrafficRegistry>,
     startup_token_file: Arc<Option<PathBuf>>,
+    reverse_proxy: ReverseProxyController,
     worker_threads: usize,
 }
 
@@ -147,6 +150,17 @@ struct AdminUsersResponse {
     users: Vec<String>,
 }
 
+#[derive(Serialize)]
+struct VlessUserResponse {
+    name: String,
+    uuid: String,
+}
+
+#[derive(Serialize)]
+struct VlessUsersResponse {
+    users: Vec<VlessUserResponse>,
+}
+
 #[derive(Deserialize)]
 struct AddAdminUserRequest {
     username: String,
@@ -190,6 +204,8 @@ pub async fn run(
     worker_threads: usize,
 ) -> Result<()> {
     load_credentials(&credentials_path)?;
+    let reverse_proxy =
+        ReverseProxyController::new(config_path.with_file_name("reverse-proxy.toml")).await?;
     let (commands, mut command_rx) = mpsc::channel(4);
     let state = AdminState {
         config_path: Arc::new(config_path.clone()),
@@ -206,6 +222,7 @@ pub async fn run(
         webui_listen: Arc::new(listen.to_string()),
         traffic: Arc::new(server::TrafficRegistry::default()),
         startup_token_file: Arc::new(token_file),
+        reverse_proxy,
         worker_threads,
     };
     let listener = tokio::net::TcpListener::bind(listen)
@@ -337,7 +354,12 @@ fn router(state: AdminState) -> Router {
         .route("/api/v1/logout", post(logout))
         .route("/api/v1/status", get(status))
         .route("/api/v1/network-capabilities", get(network_capabilities))
+        .route(
+            "/api/v1/reverse-proxy",
+            get(get_reverse_proxy).put(put_reverse_proxy),
+        )
         .route("/api/v1/config", get(get_config).put(put_config))
+        .route("/api/v1/vless-users", get(get_vless_users))
         .route("/api/v1/reload", post(reload))
         .route(
             "/api/v1/startup",
@@ -503,6 +525,8 @@ async fn network_capabilities(
     headers: HeaderMap,
 ) -> ApiResult<Json<NetworkCapabilitiesResponse>> {
     authorize(&state, &headers).await?;
+    let config = Config::load(&state.config_path).map_err(ApiError::bad_request)?;
+    let outbound = OutboundConnector::new(&config.outbound);
     let ipv4_address = probe_ipv4_route();
     let ipv6_address = probe_ipv6_route();
     let ipv4_probes = [
@@ -518,21 +542,21 @@ async fn network_capabilities(
             .expect("static IPv6 address"),
     ];
     let (ipv4_outbound, ipv6_outbound) = tokio::join!(
-        probe_tcp_connectivity(&ipv4_probes),
-        probe_tcp_connectivity(&ipv6_probes),
+        probe_tcp_connectivity(&outbound, &ipv4_probes),
+        probe_tcp_connectivity(&outbound, &ipv6_probes),
     );
     let public_ipv6 = ipv6_address.is_some_and(is_public_ipv6);
     let ipv6_to_ipv4_available = public_ipv6 && ipv4_outbound;
     let message = if ipv6_to_ipv4_available {
-        "已自动使用公网 IPv6 入站，并优先通过 IPv4 转发网站流量".to_owned()
+        "已自动使用公网 IPv6 入站，并优先通过本机 IPv4 转发网站流量".to_owned()
     } else if ipv4_outbound && ipv6_outbound {
-        "已自动优先使用 IPv4 出口，IPv4 不可用时回退 IPv6".to_owned()
+        "本机网络已就绪，自动优先使用 IPv4，IPv4 不可用时回退 IPv6".to_owned()
     } else if ipv4_outbound {
-        "已自动使用 IPv4 出口".to_owned()
+        "已使用本机 IPv4 出口".to_owned()
     } else if ipv6_outbound {
-        "当前仅有 IPv6 出口，无法访问仅支持 IPv4 的网站".to_owned()
+        "本机当前仅有 IPv6 出口，无法访问仅支持 IPv4 的网站".to_owned()
     } else {
-        "未检测到可用的 IPv4 或 IPv6 出口".to_owned()
+        "未检测到本机可用的 IPv4 或 IPv6 出口".to_owned()
     };
     Ok(Json(NetworkCapabilitiesResponse {
         ipv4_address,
@@ -545,6 +569,29 @@ async fn network_capabilities(
         ipv6_to_ipv4_available,
         message,
     }))
+}
+
+async fn get_reverse_proxy(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<ReverseProxyStatus>> {
+    authorize(&state, &headers).await?;
+    Ok(Json(state.reverse_proxy.status().await))
+}
+
+async fn put_reverse_proxy(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Json(settings): Json<ReverseProxySettings>,
+) -> ApiResult<Json<ReverseProxyStatus>> {
+    authorize(&state, &headers).await?;
+    settings.validate().map_err(ApiError::bad_request)?;
+    state
+        .reverse_proxy
+        .update(settings)
+        .await
+        .map(Json)
+        .map_err(ApiError::internal)
 }
 
 async fn get_config(
@@ -562,6 +609,33 @@ async fn get_config(
     .map_err(ApiError::internal)?
     .map_err(ApiError::bad_request)?;
     Ok(Json(config))
+}
+
+async fn get_vless_users(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<VlessUsersResponse>> {
+    authorize(&state, &headers).await?;
+    let path = Arc::clone(&state.config_path);
+    let users = tokio::task::spawn_blocking(move || {
+        Ok::<_, anyhow::Error>(
+            Config::load(&path)?
+                .users
+                .into_iter()
+                .map(|user| {
+                    let uuid = crate::vless_server::user_id_string(&user.name, &user.password);
+                    VlessUserResponse {
+                        name: user.name,
+                        uuid,
+                    }
+                })
+                .collect(),
+        )
+    })
+    .await
+    .map_err(ApiError::internal)?
+    .map_err(ApiError::bad_request)?;
+    Ok(Json(VlessUsersResponse { users }))
 }
 
 async fn put_config(
@@ -864,9 +938,27 @@ async fn sublink_auto(
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
     let requested_format = uri_parameter(&uri, "format").or_else(|| uri_parameter(&uri, "target"));
+    let server_override = uri_parameter(&uri, "server");
+    let port_override = match uri_parameter(&uri, "port") {
+        Some(port) => match port.parse::<u16>() {
+            Ok(port) if port > 0 => Some(port),
+            _ => return sublink_error(StatusCode::BAD_REQUEST, "invalid subscription port"),
+        },
+        None => None,
+    };
+    let tcp_only =
+        uri_parameter(&uri, "tcp_only").is_some_and(|value| matches!(value.as_str(), "1" | "true"));
     match state
         .sublink
-        .auto_with_format(&code, user_agent, accept, requested_format.as_deref())
+        .auto_with_overrides(
+            &code,
+            user_agent,
+            accept,
+            requested_format.as_deref(),
+            server_override.as_deref(),
+            port_override,
+            tcp_only,
+        )
         .await
     {
         Ok(output) => sublink_output_response(output),
@@ -1162,11 +1254,11 @@ fn probe_ipv6_route() -> Option<Ipv6Addr> {
     }
 }
 
-async fn probe_tcp_connectivity(addresses: &[SocketAddr]) -> bool {
+async fn probe_tcp_connectivity(outbound: &OutboundConnector, addresses: &[SocketAddr]) -> bool {
     for address in addresses {
         if tokio::time::timeout(
             std::time::Duration::from_millis(1200),
-            tokio::net::TcpStream::connect(address),
+            outbound.connect_address(*address),
         )
         .await
         .is_ok_and(|result| result.is_ok())

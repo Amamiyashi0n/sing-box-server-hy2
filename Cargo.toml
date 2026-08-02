@@ -3,7 +3,7 @@ name = "sing-box-ser-mini"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
-description = "Minimal Hysteria 2 and Trojan server implementation"
+description = "Minimal Hysteria 2 and VLESS server with a Rust WebUI"
 
 [dependencies]
 anyhow = "1.0"

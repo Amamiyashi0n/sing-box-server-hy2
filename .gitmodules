@@ -1,3 +1,6 @@
 [submodule "reference/sing-quic"]
 	path = reference/sing-quic
 	url = https://github.com/SagerNet/sing-quic.git
+[submodule "reference/xray-core"]
+	path = reference/xray-core
+	url = https://github.com/XTLS/Xray-core.git
