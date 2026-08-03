@@ -104,7 +104,7 @@
         <section class="config-section" id="network" aria-labelledby="network-title">
           <div class="section-heading"><h2 id="network-title">多协议监听与 TLS</h2></div>
           <div class="network-primary-grid">
-            <label class="field"><span>内部监听端口（UDP HY2 / TCP VLESS）</span><input id="listen-port" type="number" min="1" max="65535" step="1" required placeholder="51400"></label>
+            <label class="field"><span>内部监听端口（UDP HY2 / TCP SSH + VLESS）</span><input id="listen-port" type="number" min="1" max="65535" step="1" required placeholder="51400"></label>
             <label class="field"><span>TLS 证书</span><input id="certificate" required placeholder="/path/fullchain.pem"></label>
             <label class="field"><span>TLS 私钥</span><input id="private-key" required placeholder="/path/privkey.pem"></label>
           </div>
@@ -114,6 +114,22 @@
             <label class="field"><span>外部公网端口（NAT）</span><input id="share-port" type="number" min="1" max="65535" step="1" placeholder="54443"></label>
             <label class="field"><span>TLS SNI</span><input id="share-sni" readonly></label>
             <label class="check share-insecure"><input id="share-insecure" type="checkbox"><span>允许不安全证书</span></label>
+          </div>
+          <div class="ssh-settings">
+            <div class="ssh-setting-heading">
+              <div><h3>SSH 协议复用</h3><p>SSH 与 VLESS 共用外部 TCP 端口，UDP 端口仍用于 HY2。</p></div>
+              <label class="switch" aria-label="启用 SSH 协议复用"><input id="ssh-enabled" type="checkbox"><span></span></label>
+            </div>
+            <div class="conditional hidden" id="ssh-fields">
+              <div class="field-grid two">
+                <label class="field"><span>本地 SSH 服务</span><input id="ssh-upstream" placeholder="127.0.0.1:51401"></label>
+                <label class="field"><span>SSH 订阅用户</span><input id="ssh-username" autocomplete="off" placeholder="singbox-proxy"></label>
+              </div>
+              <div class="field-grid two ssh-key-grid">
+                <label class="field"><span>SSH 客户端私钥</span><textarea id="ssh-private-key" spellcheck="false" autocomplete="off" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label>
+                <label class="field"><span>SSH 主机公钥（可选）</span><textarea id="ssh-host-key" spellcheck="false" autocomplete="off" placeholder="留空以兼容 Mihomo SSH"></textarea></label>
+              </div>
+            </div>
           </div>
         </section>
 

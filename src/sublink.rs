@@ -261,6 +261,8 @@ struct Node {
     port: u16,
     username: String,
     password: String,
+    private_key: String,
+    host_key: String,
     method: String,
     uuid: String,
     network: String,
@@ -287,6 +289,8 @@ impl Node {
             port: 443,
             username: String::new(),
             password: String::new(),
+            private_key: String::new(),
+            host_key: String::new(),
             method: String::new(),
             uuid: String::new(),
             network: "tcp".to_owned(),
@@ -544,6 +548,19 @@ impl SublinkService {
         clash_mrs: bool,
     ) -> Result<SublinkOutput> {
         let nodes = parse_input(input)?;
+        let compatible_nodes = if format == "clash" {
+            nodes.clone()
+        } else {
+            nodes
+                .iter()
+                .filter(|node| node.kind != "ssh")
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        ensure!(
+            !compatible_nodes.is_empty(),
+            "output format does not support any subscription nodes"
+        );
         let preset = selected_rules.map(parse_rule_preset).transpose()?;
         let rules = selected_rule_specs(preset, ad_block);
         let custom_rules = parse_custom_rules(whitelist, blacklist)?;
@@ -552,26 +569,32 @@ impl SublinkService {
         match format {
             "singbox" => Ok(SublinkOutput::new(
                 "application/json; charset=utf-8",
-                render_singbox(&nodes, &rules, &custom_rules, china_optimized)?,
+                render_singbox(&compatible_nodes, &rules, &custom_rules, china_optimized)?,
                 profile_name,
                 "json",
             )),
             "clash" => Ok(SublinkOutput::new(
                 "text/yaml; charset=utf-8",
-                render_clash(&nodes, &rules, &custom_rules, clash_mrs, china_optimized),
+                render_clash(
+                    &compatible_nodes,
+                    &rules,
+                    &custom_rules,
+                    clash_mrs,
+                    china_optimized,
+                ),
                 profile_name,
                 "yaml",
             )),
             "surge" => Ok(SublinkOutput::new(
                 "text/plain; charset=utf-8",
-                render_surge(&nodes, &rules, &custom_rules, china_optimized),
+                render_surge(&compatible_nodes, &rules, &custom_rules, china_optimized),
                 profile_name,
                 "conf",
             )),
             "xray" => Ok(SublinkOutput::new(
                 "text/plain; charset=utf-8",
                 STANDARD.encode(
-                    nodes
+                    compatible_nodes
                         .iter()
                         .map(|node| node.original.as_str())
                         .collect::<Vec<_>>()
@@ -620,7 +643,7 @@ impl SublinkService {
             !nodes.is_empty()
                 && nodes
                     .iter()
-                    .all(|node| matches!(node.kind.as_str(), "hysteria2" | "vless")),
+                    .all(|node| matches!(node.kind.as_str(), "hysteria2" | "vless" | "ssh")),
             "invalid HY2 URL parameter"
         );
         ensure!(
@@ -816,7 +839,7 @@ fn rewrite_subscription_input(
     let nodes = parse_input(input)?;
     let mut rewritten = Vec::with_capacity(nodes.len());
     for node in nodes {
-        if tcp_only && node.kind != "vless" {
+        if tcp_only && !matches!(node.kind.as_str(), "vless" | "ssh") {
             continue;
         }
         let mut url = Url::parse(&node.original).map_err(|_| anyhow!("invalid proxy URI"))?;
@@ -866,7 +889,10 @@ fn subscription_name(nodes: &[Node]) -> String {
         .map(|node| node.name.trim())
         .filter(|name| !name.is_empty())
         .unwrap_or("subscription");
-    name.strip_suffix("-VLESS").unwrap_or(name).to_owned()
+    name.strip_suffix("-VLESS")
+        .or_else(|| name.strip_suffix("-SSH"))
+        .unwrap_or(name)
+        .to_owned()
 }
 
 fn positive_env(name: &str, fallback: usize) -> usize {
@@ -1065,7 +1091,7 @@ fn parse_node(uri: &str) -> Result<Node> {
     match scheme.as_str() {
         "ss" => parse_shadowsocks(uri),
         "vmess" => parse_vmess(uri),
-        "vless" | "hysteria2" | "tuic" => parse_url_node(uri, &scheme),
+        "vless" | "hysteria2" | "tuic" | "ssh" => parse_url_node(uri, &scheme),
         "hy2" | "hysteria" => parse_url_node(uri, "hysteria2"),
         _ => bail!("unsupported proxy URI"),
     }
@@ -1099,6 +1125,11 @@ fn parse_url_node(uri: &str, kind: &str) -> Result<Node> {
                 format!("{}:{}", node.username, url_password)
             };
         }
+        "ssh" => {
+            node.password = url_password;
+            node.private_key = query_value(&url, &["private-key", "privateKey"]);
+            node.host_key = query_value(&url, &["host-key", "hostKey"]);
+        }
         _ => {}
     }
     node.network = {
@@ -1123,7 +1154,7 @@ fn parse_url_node(uri: &str, kind: &str) -> Result<Node> {
     node.obfs = query_value(&url, &["obfs"]);
     node.obfs_password = query_value(&url, &["obfs-password", "obfsPassword"]);
     let security = query_value(&url, &["security"]);
-    node.tls = !matches!(kind, "vless" | "vmess");
+    node.tls = !matches!(kind, "vless" | "vmess" | "ssh");
     if !security.is_empty() {
         node.tls = !matches!(security.to_ascii_lowercase().as_str(), "none" | "false");
     }
@@ -1137,7 +1168,8 @@ fn parse_url_node(uri: &str, kind: &str) -> Result<Node> {
     }
     ensure!(
         !(matches!(kind, "vless" | "tuic") && node.uuid.is_empty()
-            || kind == "hysteria2" && node.password.is_empty()),
+            || kind == "hysteria2" && node.password.is_empty()
+            || kind == "ssh" && (node.username.is_empty() || node.private_key.is_empty())),
         "proxy credentials are missing"
     );
     Ok(node)
@@ -1548,6 +1580,22 @@ fn render_clash(
         yaml_field(&mut output, "server", &node.server);
         let _ = writeln!(output, "    port: {}", node.port);
         match node.kind.as_str() {
+            "ssh" => {
+                yaml_field(&mut output, "username", &node.username);
+                yaml_block_field(&mut output, "private-key", &node.private_key);
+                if !node.host_key.trim().is_empty() {
+                    output.push_str("    host-key:\n");
+                    for host_key in node
+                        .host_key
+                        .lines()
+                        .map(str::trim)
+                        .filter(|line| !line.is_empty())
+                    {
+                        let _ = writeln!(output, "      - {}", yaml_quote(host_key));
+                    }
+                }
+                output.push_str("    udp: false\n");
+            }
             "shadowsocks" => {
                 yaml_field(&mut output, "cipher", &node.method);
                 yaml_field(&mut output, "password", &node.password);
@@ -1685,6 +1733,13 @@ fn yaml_field(output: &mut String, key: &str, value: &str) {
     let _ = writeln!(output, "    {key}: {}", yaml_quote(value));
 }
 
+fn yaml_block_field(output: &mut String, key: &str, value: &str) {
+    let _ = writeln!(output, "    {key}: |-");
+    for line in value.replace('\r', "").lines() {
+        let _ = writeln!(output, "      {line}");
+    }
+}
+
 fn render_surge(
     nodes: &[Node],
     selected_rules: &[&RuleSpec],
@@ -1769,6 +1824,19 @@ fn render_surge(
 }
 
 fn proxy_node_names(nodes: &[Node]) -> Vec<String> {
+    if nodes.iter().any(|node| node.kind == "ssh") {
+        return nodes
+            .iter()
+            .filter(|node| node.kind == "ssh")
+            .chain(nodes.iter().filter(|node| node.kind == "vless"))
+            .chain(
+                nodes
+                    .iter()
+                    .filter(|node| !matches!(node.kind.as_str(), "ssh" | "vless")),
+            )
+            .map(|node| node.name.clone())
+            .collect();
+    }
     let shared_tcp_fallback = nodes.len() >= 2
         && nodes.iter().any(|node| node.kind == "hysteria2")
         && nodes.iter().any(|node| node.kind == "vless")
@@ -1914,6 +1982,58 @@ mod tests {
     use super::*;
 
     const VLESS: &str = "vless://12345678-1234-1234-1234-123456789012@example.com:443?type=ws&security=tls&path=%2Fws&host=edge.example.com#smoke";
+
+    fn ssh_node() -> String {
+        let mut url = Url::parse("ssh://singbox-proxy@example.com:51400").unwrap();
+        url.query_pairs_mut()
+            .append_pair(
+                "private-key",
+                "-----BEGIN OPENSSH PRIVATE KEY-----\nkey-data\n-----END OPENSSH PRIVATE KEY-----",
+            )
+            .append_pair("host-key", "ssh-ed25519 AAAAtest host");
+        url.set_fragment(Some("smoke-SSH"));
+        url.to_string()
+    }
+
+    #[test]
+    fn clash_subscription_prefers_encrypted_ssh_and_other_formats_fall_back() {
+        let service = SublinkService::default();
+        let input = format!("{}\n{VLESS}", ssh_node());
+        let clash = service.convert("clash", &input).unwrap().body;
+        assert!(clash.contains("type: 'ssh'"));
+        assert!(clash.contains("username: 'singbox-proxy'"));
+        assert!(clash.contains("private-key: |-\n      -----BEGIN OPENSSH PRIVATE KEY-----"));
+        assert!(clash.contains("- 'ssh-ed25519 AAAAtest host'"));
+        assert!(clash.find("- 'smoke-SSH'").unwrap() < clash.find("- 'smoke'").unwrap());
+
+        let singbox = service.convert("singbox", &input).unwrap().body;
+        assert!(!singbox.contains("\"type\":\"ssh\""));
+        assert!(singbox.contains("\"type\":\"vless\""));
+        let universal = String::from_utf8(
+            STANDARD
+                .decode(service.convert("xray", &input).unwrap().body)
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(!universal.contains("ssh://"));
+        assert!(universal.contains("vless://"));
+
+        let mut without_host_key = Url::parse(&ssh_node()).unwrap();
+        let query = without_host_key
+            .query_pairs()
+            .filter(|(key, _)| key != "host-key")
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect::<Vec<_>>();
+        without_host_key
+            .query_pairs_mut()
+            .clear()
+            .extend_pairs(query);
+        let clash = service
+            .convert("clash", without_host_key.as_str())
+            .unwrap()
+            .body;
+        assert!(!clash.contains("host-key:"));
+    }
 
     #[test]
     fn relay_subscription_rewrites_endpoint_and_keeps_only_tcp_nodes() {

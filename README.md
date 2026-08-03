@@ -200,6 +200,32 @@ the first node name (the shared username for generated user links) as the profil
 title and download filename. User IPv4/IPv6 links are permanent; only
 converter-workspace links use the 24-hour persisted TTL.
 
+Mihomo subscriptions can include an encrypted SSH proxy as the preferred node.
+SSH and VLESS share one public TCP port: the Rust listener recognizes the SSH
+identification prefix and forwards that connection to a loopback-only OpenSSH
+daemon, while TLS connections continue through VLESS. HY2 keeps the same port
+number over UDP. Clients without SSH proxy support automatically receive the
+VLESS fallback instead of an invalid SSH node.
+
+```toml
+[ssh]
+enabled = true
+upstream = "127.0.0.1:51401"
+username = "singbox-proxy"
+private_key = """-----BEGIN OPENSSH PRIVATE KEY-----
+...
+-----END OPENSSH PRIVATE KEY-----"""
+host_key = "" # optional host-key pin
+```
+
+For safety, `ssh.upstream` must be a loopback address. The OpenSSH daemon should
+disable interactive sessions and passwords, permit local TCP forwarding, and
+bind only to this address. The private key is delivered only inside the
+authenticated subscription response; it is not placed in the public short URL.
+`host_key` is optional because some Mihomo SSH builds fail to dial when a pinned
+Ed25519 host key is supplied; leaving it empty affects server identity pinning,
+not SSH transport encryption or client-key authentication.
+
 The conversion behavior was rewritten in Rust from the MIT-licensed
 `Amamiyashi0n/sublink-worker-c` implementation; no C code, darkhttpd process,
 or secondary HTTP port is included.

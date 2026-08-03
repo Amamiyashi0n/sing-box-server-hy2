@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use sing_box_ser_mini::config::Config;
 
 #[derive(Debug, Parser)]
-#[command(about = "Minimal Hysteria 2 and VLESS server with a Rust WebUI")]
+#[command(about = "Minimal HY2, SSH, and VLESS server with a Rust WebUI")]
 struct Args {
     #[command(subcommand)]
     command: Option<Command>,
@@ -135,7 +135,7 @@ async fn run(args: Args, worker_threads: usize) -> Result<()> {
     let config = Config::load(&args.config)?;
     if args.check {
         println!(
-            "HY2 and VLESS server configuration is valid: listen={}, users={}",
+            "HY2, SSH, and VLESS server configuration is valid: listen={}, users={}",
             config.listen,
             config.users.len()
         );

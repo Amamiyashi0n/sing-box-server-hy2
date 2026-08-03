@@ -141,6 +141,12 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.5; }
 .check { min-height: 28px; display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; cursor: pointer; }
 .check input { width: 16px; min-height: 16px; accent-color: #d5d5d5; }
 .conditional, .share-settings { margin-top: 17px; padding-top: 17px; border-top: 1px solid var(--line-soft); }
+.ssh-settings { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--line-soft); }
+.ssh-setting-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.ssh-setting-heading h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.ssh-setting-heading p { margin: 5px 0 0; color: var(--subtle); font-size: 11px; }
+.ssh-key-grid { margin-top: 14px; align-items: start; }
+.ssh-key-grid textarea { min-height: 118px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
 .share-insecure { align-self: end; padding-bottom: 6px; }
 .outbound-settings { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--line-soft); }
 .outbound-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }

@@ -10,6 +10,8 @@ pub struct Config {
     pub tls: TlsConfig,
     pub users: Vec<User>,
     #[serde(default)]
+    pub ssh: SshConfig,
+    #[serde(default)]
     pub bandwidth: Bandwidth,
     #[serde(default)]
     pub udp: UdpConfig,
@@ -18,6 +20,21 @@ pub struct Config {
     pub obfs: Option<ObfsConfig>,
     pub masquerade: Option<MasqueradeConfig>,
     pub share: Option<ShareConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SshConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_ssh_upstream")]
+    pub upstream: SocketAddr,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub private_key: String,
+    #[serde(default)]
+    pub host_key: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -129,6 +146,10 @@ const fn default_udp_timeout_secs() -> u64 {
     300
 }
 
+fn default_ssh_upstream() -> SocketAddr {
+    SocketAddr::from(([127, 0, 0, 1], 51401))
+}
+
 const fn default_masquerade_status() -> u16 {
     200
 }
@@ -142,6 +163,18 @@ impl Default for UdpConfig {
         Self {
             enabled: true,
             timeout_secs: default_udp_timeout_secs(),
+        }
+    }
+}
+
+impl Default for SshConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            upstream: default_ssh_upstream(),
+            username: String::new(),
+            private_key: String::new(),
+            host_key: String::new(),
         }
     }
 }
@@ -201,6 +234,20 @@ impl Config {
             self.udp.timeout_secs > 0,
             "UDP timeout must be greater than zero"
         );
+        if self.ssh.enabled {
+            ensure!(
+                self.ssh.upstream.ip().is_loopback(),
+                "SSH upstream must use a loopback address"
+            );
+            ensure!(
+                !self.ssh.username.trim().is_empty(),
+                "SSH username is required"
+            );
+            ensure!(
+                !self.ssh.private_key.trim().is_empty(),
+                "SSH private key is required"
+            );
+        }
         if let Some(obfs) = &self.obfs {
             ensure!(obfs.kind == "salamander", "unsupported obfuscation type");
             ensure!(
@@ -351,5 +398,17 @@ mod tests {
         let config = base_config();
         assert_eq!(config.outbound.mode, OutboundMode::PreferIpv4);
         assert!(config.to_toml().unwrap().contains("mode = \"prefer_ipv4\""));
+    }
+
+    #[test]
+    fn ssh_protocol_sharing_requires_loopback_and_keys() {
+        let mut config = base_config();
+        config.ssh.enabled = true;
+        config.ssh.username = "singbox-proxy".to_owned();
+        config.ssh.private_key = "private-key".to_owned();
+        assert!(config.validate().is_ok());
+
+        config.ssh.upstream = "198.51.100.10:51401".parse().unwrap();
+        assert!(config.validate().is_err());
     }
 }

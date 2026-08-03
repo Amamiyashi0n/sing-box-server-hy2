@@ -13,10 +13,12 @@ use tokio_rustls::TlsAcceptor;
 use crate::{config::Config, outbound::OutboundConnector, server::TrafficRegistry};
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const SSH_SNIFF_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub(crate) struct ConnectionOptions {
     pub acceptor: TlsAcceptor,
     pub vless_users: Arc<crate::vless_server::VlessUsers>,
+    pub ssh_upstream: Option<SocketAddr>,
     pub outbound: OutboundConnector,
     pub udp_timeout: Duration,
     pub traffic: Arc<TrafficRegistry>,
@@ -71,11 +73,17 @@ pub(crate) async fn serve(
     let ConnectionOptions {
         acceptor,
         vless_users,
+        ssh_upstream,
         outbound,
         udp_timeout,
         traffic,
     } = options;
     socket.set_nodelay(true)?;
+    if let Some(upstream) = ssh_upstream
+        && is_ssh_connection(&socket).await?
+    {
+        return serve_ssh(socket, upstream).await;
+    }
     let mut stream = timeout(HANDSHAKE_TIMEOUT, acceptor.accept(socket))
         .await
         .context("VLESS TLS handshake timed out")?
@@ -94,4 +102,86 @@ pub(crate) async fn serve(
         .cloned()
         .context("invalid VLESS user")?;
     crate::vless_server::serve(stream, remote, username, outbound, udp_timeout, traffic).await
+}
+
+async fn is_ssh_connection(socket: &TcpStream) -> Result<bool> {
+    let mut prefix = [0_u8; 4];
+    match timeout(SSH_SNIFF_TIMEOUT, async {
+        loop {
+            let length = socket.peek(&mut prefix).await?;
+            if length == 0 {
+                return Ok(false);
+            }
+            if prefix[..length] != b"SSH-"[..length] {
+                return Ok(false);
+            }
+            if length == prefix.len() {
+                return Ok(true);
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    {
+        Ok(result) => result,
+        // Some SSH clients wait for the server identification first. TLS
+        // clients send a ClientHello immediately, so an idle connection is SSH.
+        Err(_) => Ok(true),
+    }
+}
+
+async fn serve_ssh(mut client: TcpStream, upstream: SocketAddr) -> Result<()> {
+    let mut server = TcpStream::connect(upstream)
+        .await
+        .with_context(|| format!("connect SSH upstream {upstream}"))?;
+    server.set_nodelay(true)?;
+    tokio::io::copy_bidirectional(&mut client, &mut server)
+        .await
+        .context("relay SSH connection")?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::io::AsyncWriteExt;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn detects_ssh_without_consuming_the_client_banner() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        client.write_all(b"SSH-2.0-test\r\n").await.unwrap();
+
+        assert!(is_ssh_connection(&server).await.unwrap());
+        let mut banner = [0_u8; 4];
+        server.peek(&mut banner).await.unwrap();
+        assert_eq!(&banner, b"SSH-");
+    }
+
+    #[tokio::test]
+    async fn leaves_tls_connections_for_vless() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        client.write_all(&[0x16, 0x03, 0x01, 0x00]).await.unwrap();
+
+        assert!(!is_ssh_connection(&server).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn idle_server_first_connections_are_routed_to_ssh() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+
+        assert!(is_ssh_connection(&server).await.unwrap());
+    }
 }

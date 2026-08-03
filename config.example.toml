@@ -4,6 +4,17 @@ listen = "[::]:443"
 certificate = "/workspace/certs/fullchain.pem"
 private_key = "/workspace/certs/privkey.pem"
 
+# Optional encrypted SSH proxy. The public TCP listen port is shared with VLESS;
+# this backend must remain loopback-only.
+# [ssh]
+# enabled = true
+# upstream = "127.0.0.1:51401"
+# username = "singbox-proxy"
+# private_key = """-----BEGIN OPENSSH PRIVATE KEY-----
+# ...
+# -----END OPENSSH PRIVATE KEY-----"""
+# host_key = "" # optional pin; leave empty for broad Mihomo compatibility
+
 [[users]]
 name = "example"
 password = "replace-with-a-long-random-password"

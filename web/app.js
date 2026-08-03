@@ -567,6 +567,12 @@ async function loadConfig() {
   $("#listen-port").value = listenPort(config.listen) ?? 443;
   $("#certificate").value = config.tls?.certificate || "";
   $("#private-key").value = config.tls?.private_key || "";
+  $("#ssh-enabled").checked = Boolean(config.ssh?.enabled);
+  $("#ssh-upstream").value = config.ssh?.upstream || "127.0.0.1:51401";
+  $("#ssh-username").value = config.ssh?.username || "";
+  $("#ssh-private-key").value = config.ssh?.private_key || "";
+  $("#ssh-host-key").value = config.ssh?.host_key || "";
+  toggleSsh();
   setShareAddress("#share-ipv4-server", config.share?.server);
   setShareAddress("#share-ipv6-server", config.share?.ipv6_server);
   $("#share-port").value = config.share?.port ?? listenPort(config.listen) ?? 443;
@@ -815,6 +821,19 @@ function buildVlessShareLink(user, server) {
   return `vless://${uuid}@${shareHost(server)}:${port}?${query.toString()}#${encodeURIComponent(name)}`;
 }
 
+function buildSshSubscriptionNode(user, server) {
+  if (!$("#ssh-enabled").checked) return "";
+  const port = Number($("#share-port").value);
+  const username = $("#ssh-username").value.trim();
+  const privateKey = $("#ssh-private-key").value.trim();
+  const hostKey = $("#ssh-host-key").value.trim();
+  if (!server || !port || !username || !privateKey) return "";
+  const query = new URLSearchParams({ "private-key": privateKey });
+  if (hostKey) query.set("host-key", hostKey);
+  const name = user.name ? `${user.name}-SSH` : "SSH";
+  return `ssh://${encodeUserInfo(username)}@${shareHost(server)}:${port}?${query.toString()}#${encodeURIComponent(name)}`;
+}
+
 function currentShareLinks() {
   const servers = [
     { family: "IPv4", server: $("#share-ipv4-server").value.trim() },
@@ -823,7 +842,16 @@ function currentShareLinks() {
   return collectUsers(false).flatMap(user => servers.map(({ family, server }) => {
     const link = buildHy2ShareLink(user, server);
     const vless = buildVlessShareLink(user, server);
-    return { user, family, link, vless, subscription: vless, subscriptionIdentity: link };
+    const ssh = buildSshSubscriptionNode(user, server);
+    return {
+      user,
+      family,
+      link,
+      vless,
+      ssh,
+      subscription: [ssh, vless].filter(Boolean).join("\n"),
+      subscriptionIdentity: link
+    };
   })).filter(item => item.link && item.vless);
 }
 
@@ -849,6 +877,15 @@ function renderShareLinks() {
   target.innerHTML = links.map((item, index) => `
     <article class="share-link-card">
       <header class="share-link-user"><strong>${escapeHtml(item.user.name || "未命名用户")}</strong></header>
+      <div class="share-protocol">
+        <div class="share-protocol-name">SSH</div>
+        <div class="share-link-fields">
+          <div class="share-link-line">
+            <span>${item.family} TCP</span>
+            <input aria-label="${escapeHtml(item.user.name || "用户")} SSH ${item.family} 节点" readonly value="${item.ssh ? "已包含在默认订阅（Mihomo）" : "SSH 协议复用未启用"}">
+          </div>
+        </div>
+      </div>
       <div class="share-protocol">
         <div class="share-protocol-name">VLESS</div>
         <div class="share-link-fields">
@@ -936,6 +973,16 @@ function toggleObfs() {
   const enabled = $("#obfs-enabled").checked;
   $("#obfs-fields").classList.toggle("hidden", !enabled);
   $("#obfs-password").required = enabled;
+  renderShareLinks();
+}
+
+function toggleSsh() {
+  const enabled = $("#ssh-enabled").checked;
+  $("#ssh-fields").classList.toggle("hidden", !enabled);
+  for (const selector of ["#ssh-upstream", "#ssh-username", "#ssh-private-key"]) {
+    $(selector).required = enabled;
+  }
+  $("#ssh-host-key").required = false;
   renderShareLinks();
 }
 
@@ -1068,6 +1115,13 @@ function collectConfig() {
     listen: `[::]:${listenPortValue}`,
     tls: { certificate: $("#certificate").value.trim(), private_key: $("#private-key").value.trim() },
     users: collectUsers(),
+    ssh: {
+      enabled: $("#ssh-enabled").checked,
+      upstream: $("#ssh-upstream").value.trim() || "127.0.0.1:51401",
+      username: $("#ssh-username").value.trim(),
+      private_key: $("#ssh-private-key").value.trim(),
+      host_key: $("#ssh-host-key").value.trim()
+    },
     bandwidth: {
       up_mbps: Number($("#up-mbps").value || 0),
       down_mbps: Number($("#down-mbps").value || 0),
@@ -1150,6 +1204,7 @@ function bindEvents() {
   $("#reverse-generate-token").addEventListener("click", generateReverseToken);
   $("#add-user").addEventListener("click", addUser);
   $("#obfs-enabled").addEventListener("change", toggleObfs);
+  $("#ssh-enabled").addEventListener("change", toggleSsh);
   $("#show-passwords").addEventListener("change", applyPasswordVisibility);
   $("#config-form").addEventListener("input", renderShareLinks);
   $("#share-rule-preset").addEventListener("change", event => {

@@ -170,6 +170,9 @@ where
     let outbound = OutboundConnector::new(&config.outbound);
     info!(%listen, users = users.len(), "HY2 server listening");
     info!(%listen, users = vless_users.len(), "VLESS TLS/TCP server listening");
+    if config.ssh.enabled {
+        info!(%listen, upstream = %config.ssh.upstream, "SSH/TCP protocol sharing enabled");
+    }
 
     tokio::pin!(shutdown);
     loop {
@@ -189,6 +192,7 @@ where
             let (socket, remote) = accepted.context("accept TCP proxy connection")?;
             let acceptor = tcp_acceptor.clone();
             let vless_users = Arc::clone(&vless_users);
+            let ssh_upstream = config.ssh.enabled.then_some(config.ssh.upstream);
             let traffic = Arc::clone(&traffic);
             let outbound = outbound.clone();
             let udp_timeout = Duration::from_secs(config.udp.timeout_secs);
@@ -199,6 +203,7 @@ where
                     crate::tcp_server::ConnectionOptions {
                         acceptor,
                         vless_users,
+                        ssh_upstream,
                         outbound,
                         udp_timeout,
                         traffic,
