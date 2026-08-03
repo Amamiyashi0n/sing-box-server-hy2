@@ -159,9 +159,10 @@ also grouped on this page.
 
 ### Protocol subscription nodes
 
-Each permanent user subscription contains two standards-compliant nodes:
-Hysteria 2 over QUIC/UDP and VLESS over TLS/TCP. The reverse TCP entry exposes
-only the VLESS node because standard Hysteria 2 requires QUIC/UDP.
+The WebUI exposes standards-compliant Hysteria 2 over QUIC/UDP and VLESS over
+TLS/TCP as individual links. The permanent default subscription contains only
+VLESS, while HY2 remains available for explicit copying. The reverse TCP entry
+also exposes only VLESS because standard Hysteria 2 requires QUIC/UDP.
 
 ## Subscription converter
 
@@ -204,7 +205,7 @@ The conversion behavior was rewritten in Rust from the MIT-licensed
 or secondary HTTP port is included.
 
 Add optional sharing metadata to generate standards-compliant Hysteria 2 and
-VLESS URIs and one permanent dual-protocol subscription per user.
+VLESS URIs and one permanent VLESS subscription per user.
 The VLESS UUID is deterministically derived from the username and shared password,
 so users remain isolated even when passwords match and existing files need no migration:
 

@@ -823,7 +823,7 @@ function currentShareLinks() {
   return collectUsers(false).flatMap(user => servers.map(({ family, server }) => {
     const link = buildHy2ShareLink(user, server);
     const vless = buildVlessShareLink(user, server);
-    return { user, family, link, vless, subscription: [link, vless].filter(Boolean).join("\n") };
+    return { user, family, link, vless, subscription: vless, subscriptionIdentity: link };
   })).filter(item => item.link && item.vless);
 }
 
@@ -850,16 +850,6 @@ function renderShareLinks() {
     <article class="share-link-card">
       <header class="share-link-user"><strong>${escapeHtml(item.user.name || "未命名用户")}</strong></header>
       <div class="share-protocol">
-        <div class="share-protocol-name">HY2</div>
-        <div class="share-link-fields">
-          <div class="share-link-line">
-            <span>${item.family} UDP</span>
-            <input aria-label="${escapeHtml(item.user.name || "用户")} HY2 ${item.family} 连接" readonly value="${escapeHtml(item.link)}">
-            <button class="button secondary compact" data-copy-link="${index}" data-link-kind="hy2" type="button">复制</button>
-          </div>
-        </div>
-      </div>
-      <div class="share-protocol">
         <div class="share-protocol-name">VLESS</div>
         <div class="share-link-fields">
           <div class="share-link-line">
@@ -868,11 +858,21 @@ function renderShareLinks() {
             <button class="button secondary compact" data-copy-link="${index}" data-link-kind="vless" type="button" ${item.vless ? "" : "disabled"}>复制</button>
           </div>
           <div class="share-link-line">
-            <span>双协议订阅</span>
-            <input aria-label="${escapeHtml(item.user.name || "用户")} ${item.family} 双协议订阅" readonly
+            <span>默认订阅</span>
+            <input aria-label="${escapeHtml(item.user.name || "用户")} ${item.family} 默认订阅" readonly
               value="${escapeHtml(state.shareShortLinks.get(item.link) || "")}"
               placeholder="${state.shareShortLinksPending.has(item.link) ? "正在生成" : escapeHtml(state.shareShortLinkErrors.get(item.link) || "保存后生成")}">
             <button class="button secondary compact" data-copy-link="${index}" data-link-kind="short" type="button" ${state.shareShortLinks.has(item.link) ? "" : "disabled"}>复制</button>
+          </div>
+        </div>
+      </div>
+      <div class="share-protocol">
+        <div class="share-protocol-name">HY2</div>
+        <div class="share-link-fields">
+          <div class="share-link-line">
+            <span>${item.family} UDP</span>
+            <input aria-label="${escapeHtml(item.user.name || "用户")} HY2 ${item.family} 连接" readonly value="${escapeHtml(item.link)}">
+            <button class="button secondary compact" data-copy-link="${index}" data-link-kind="hy2" type="button">复制</button>
           </div>
         </div>
       </div>
@@ -885,7 +885,7 @@ function renderShareLinks() {
     if (!link) return;
     try {
       await copyText(link);
-      const message = button.dataset.linkKind === "short" ? "双协议短链接已复制"
+      const message = button.dataset.linkKind === "short" ? "默认订阅已复制"
         : button.dataset.linkKind === "vless" ? "VLESS TLS/TCP 连接已复制"
           : "HY2 连接已复制";
       toast(message);
@@ -906,6 +906,7 @@ async function generateShareShortLinks() {
     try {
       const longUrl = new URL("/xray", window.location.origin);
       longUrl.searchParams.set("config", item.subscription);
+      longUrl.searchParams.set("identity", item.subscriptionIdentity);
       longUrl.searchParams.set("selectedRules", state.shareRulePreset);
       if (state.shareAdBlock && state.shareRulePreset !== "comprehensive") {
         longUrl.searchParams.set("adblock", "true");

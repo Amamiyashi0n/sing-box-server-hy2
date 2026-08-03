@@ -617,7 +617,7 @@ impl SublinkService {
         let config = query_value(&url, &["config"]);
         let nodes = parse_input(&config).map_err(|_| anyhow!("invalid HY2 URL parameter"))?;
         ensure!(
-            nodes.first().is_some_and(|node| node.kind == "hysteria2")
+            !nodes.is_empty()
                 && nodes
                     .iter()
                     .all(|node| matches!(node.kind.as_str(), "hysteria2" | "vless")),
@@ -627,11 +627,23 @@ impl SublinkService {
             config.len() <= MAX_INPUT_BYTES,
             "URL parameter is too large"
         );
-        let primary_hy2 = config
-            .lines()
-            .map(str::trim)
-            .find(|line| line.starts_with("hysteria2://"))
-            .ok_or_else(|| anyhow!("invalid HY2 URL parameter"))?;
+        let identity = query_value_optional(&url, &["identity"]);
+        let primary_hy2 = match identity.as_deref() {
+            Some(identity) => {
+                let identity_nodes =
+                    parse_input(identity).map_err(|_| anyhow!("invalid HY2 identity parameter"))?;
+                ensure!(
+                    identity_nodes.len() == 1 && identity_nodes[0].kind == "hysteria2",
+                    "invalid HY2 identity parameter"
+                );
+                identity.trim()
+            }
+            None => config
+                .lines()
+                .map(str::trim)
+                .find(|line| line.starts_with("hysteria2://"))
+                .ok_or_else(|| anyhow!("invalid HY2 URL parameter"))?,
+        };
         let code = stable_code(primary_hy2.as_bytes());
         let selected_rules = query_value_optional(&url, &["selectedRules"]);
         if let Some(selected_rules) = selected_rules.as_deref() {
@@ -847,12 +859,14 @@ impl SublinkOutput {
 }
 
 fn subscription_name(nodes: &[Node]) -> String {
-    nodes
-        .first()
+    let name = nodes
+        .iter()
+        .find(|node| node.kind == "hysteria2")
+        .or_else(|| nodes.first())
         .map(|node| node.name.trim())
         .filter(|name| !name.is_empty())
-        .unwrap_or("subscription")
-        .to_owned()
+        .unwrap_or("subscription");
+    name.strip_suffix("-VLESS").unwrap_or(name).to_owned()
 }
 
 fn positive_env(name: &str, fallback: usize) -> usize {
@@ -2026,7 +2040,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn permanent_hy2_link_adds_vless_without_changing_code() {
+    async fn permanent_identity_keeps_code_for_vless_only_subscription() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("hy2-vless-links.toml");
         let hy2 = "hysteria2://password@example.com:443/?sni=example.com#user";
@@ -2037,15 +2051,16 @@ mod tests {
             url::form_urlencoded::byte_serialize(hy2.as_bytes()).collect::<String>()
         );
         let code = service.shorten_hy2(&hy2_url).await.unwrap();
-        let protocols = format!("{hy2}\n{vless}");
-        let protocols_url = format!(
-            "https://example.com/xray?config={}",
-            url::form_urlencoded::byte_serialize(protocols.as_bytes()).collect::<String>()
+        let vless_url = format!(
+            "https://example.com/xray?config={}&identity={}",
+            url::form_urlencoded::byte_serialize(vless.as_bytes()).collect::<String>(),
+            url::form_urlencoded::byte_serialize(hy2.as_bytes()).collect::<String>()
         );
-        assert_eq!(service.shorten_hy2(&protocols_url).await.unwrap(), code);
+        assert_eq!(service.shorten_hy2(&vless_url).await.unwrap(), code);
 
         let output = service.auto(&code, "sing-box/1.14", "").await.unwrap();
-        assert!(output.body.contains("\"type\":\"hysteria2\""));
+        assert_eq!(output.profile_name, "user");
+        assert!(!output.body.contains("\"type\":\"hysteria2\""));
         assert!(output.body.contains("\"type\":\"vless\""));
         let document: Value = serde_json::from_str(&output.body).unwrap();
         let selector = document["outbounds"]
@@ -2054,7 +2069,7 @@ mod tests {
             .iter()
             .find(|outbound| outbound["tag"] == "PROXY")
             .unwrap();
-        assert_eq!(selector["outbounds"], json!(["user-VLESS", "user"]));
+        assert_eq!(selector["outbounds"], json!(["user-VLESS"]));
 
         let clash = service
             .auto(&code, "clash-verge/v2.4", "")
@@ -2062,8 +2077,9 @@ mod tests {
             .unwrap()
             .body;
         assert!(clash.contains("type: 'vless'"));
+        assert!(!clash.contains("type: 'hysteria2'"));
         assert!(clash.contains("    udp: false"));
-        assert!(clash.contains("sni: 'example.com'"));
+        assert!(clash.contains("servername: 'example.com'"));
     }
 
     #[tokio::test]
